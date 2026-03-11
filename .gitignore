@@ -1,0 +1,7 @@
+/target/
+.gitnexus
+node_modules/
+.agents
+.claude
+.trae
+skills

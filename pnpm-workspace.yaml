@@ -1,0 +1,6 @@
+packages:
+    - ./GitNexus/gitnexus
+    - ./GitNexus/gitnexus-web
+allowBuilds:
+    kuzu: true
+    tree-sitter-kotlin: true

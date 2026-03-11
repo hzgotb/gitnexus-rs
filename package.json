@@ -1,0 +1,11 @@
+{
+    "name": "gitnexus-rs-workspace",
+    "private": true,
+    "version": "0.0.0",
+    "dependencies": {
+        "gitnexus": "workspace:*"
+    },
+    "scripts": {
+        "analyze": "pnpm exec gitnexus analyze"
+    }
+}
