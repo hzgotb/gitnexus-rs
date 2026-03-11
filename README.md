@@ -1,5 +1,7 @@
 # gitnexus-rs
 
+中文文档请见 [README.zh-CN.md](./README.zh-CN.md)。
+
 Rust migration baseline for the `gitnexus` package.
 
 This crate is intentionally added **alongside** the existing TypeScript package (`/gitnexus`) so migration can happen incrementally without breaking current workflows.
