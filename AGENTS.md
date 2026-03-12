@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **gitnexus-rs** (2112 symbols, 5524 relationships, 160 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **gitnexus-rs** (2234 symbols, 5918 relationships, 171 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -94,6 +94,12 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 - Generate docs: `npx gitnexus wiki`
 
 <!-- gitnexus:end -->
+
+## Project-Specific Rules
+
+- **MUST update both README files after every completed migration.** Any migration task is only considered complete after syncing migration-related docs in:
+  - `MIGRATION_PROGRESS.md`
+- Migration doc sync should include at least: what changed, required commands/config, and any compatibility or breaking-change notes.
 
 ## Skills
 A skill is a set of local instructions stored in a `SKILL.md` file. The list below reflects currently installed skills under `.agents/skills`.
