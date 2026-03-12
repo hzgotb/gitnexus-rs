@@ -6,7 +6,11 @@ use anyhow::{Context, Result, bail};
 use axum::{
     Router,
     body::{Body, to_bytes},
-    http::Request as AxumRequest,
+    extract::State,
+    http::{
+        HeaderMap, HeaderValue, Method, Request as AxumRequest,
+        header::{ACCEPT, CONTENT_TYPE},
+    },
     response::Response as AxumResponse,
     routing::any,
 };
@@ -25,6 +29,7 @@ const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 4747;
 const MAX_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 const GRAPH_CACHE_FILENAME: &str = "graph.json";
+type GitNexusMcpHttpService = StreamableHttpService<GitNexusMcpServer, LocalSessionManager>;
 
 #[derive(Debug)]
 struct HttpRequest {
@@ -61,21 +66,90 @@ async fn run_server_async(host: String, port: u16) -> Result<()> {
 
     println!("GitNexus server running on http://{host}:{port}");
 
-    let mcp_service: StreamableHttpService<GitNexusMcpServer, LocalSessionManager> =
-        StreamableHttpService::new(
-            || Ok(GitNexusMcpServer::default()),
-            Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig::default(),
-        );
+    let mcp_config = StreamableHttpServerConfig {
+        // Disable priming empty SSE frames to improve compatibility with strict SSE decoders.
+        sse_retry: None,
+        ..StreamableHttpServerConfig::default()
+    };
+
+    let mcp_service: Arc<GitNexusMcpHttpService> = Arc::new(StreamableHttpService::new(
+        || Ok(GitNexusMcpServer::default()),
+        Arc::new(LocalSessionManager::default()),
+        mcp_config,
+    ));
 
     let app = Router::new()
-        .nest_service("/api/mcp", mcp_service)
+        .route("/api/mcp", any(mcp_http_handler))
+        .route("/api/mcp/", any(mcp_http_handler))
+        .with_state(mcp_service)
         .fallback(any(legacy_http_handler));
 
     axum::serve(listener, app)
         .await
         .context("axum server terminated unexpectedly")?;
     Ok(())
+}
+
+async fn mcp_http_handler(
+    State(mcp_service): State<Arc<GitNexusMcpHttpService>>,
+    mut request: AxumRequest<Body>,
+) -> impl axum::response::IntoResponse {
+    let method = request.method().clone();
+    normalize_request_headers(&method, request.headers_mut());
+
+    let mut response = mcp_service.handle(request).await;
+    if response.headers().get(CONTENT_TYPE).is_none() {
+        response.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        );
+    }
+    response
+}
+
+fn normalize_request_headers(method: &Method, headers: &mut HeaderMap) {
+    match *method {
+        Method::POST => {
+            ensure_post_accept(headers);
+            ensure_json_content_type(headers);
+        }
+        Method::GET => ensure_get_accept(headers),
+        _ => {}
+    }
+}
+
+fn ensure_post_accept(headers: &mut HeaderMap) {
+    let accept = header_to_ascii_lowercase(headers, ACCEPT);
+    let has_json = accept.contains("application/json");
+    let has_sse = accept.contains("text/event-stream");
+    if !(has_json && has_sse) {
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/json, text/event-stream"),
+        );
+    }
+}
+
+fn ensure_get_accept(headers: &mut HeaderMap) {
+    let accept = header_to_ascii_lowercase(headers, ACCEPT);
+    if !accept.contains("text/event-stream") {
+        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+    }
+}
+
+fn ensure_json_content_type(headers: &mut HeaderMap) {
+    let content_type = header_to_ascii_lowercase(headers, CONTENT_TYPE);
+    if !content_type.starts_with("application/json") {
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    }
+}
+
+fn header_to_ascii_lowercase(headers: &HeaderMap, name: axum::http::header::HeaderName) -> String {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 async fn legacy_http_handler(request: AxumRequest<Body>) -> AxumResponse {

@@ -8,6 +8,7 @@ pub mod detect_changes;
 pub mod eval_server;
 pub mod impact;
 pub mod list;
+pub mod local_kuzu;
 pub mod local_mcp;
 pub mod local_serve;
 pub mod local_tools;

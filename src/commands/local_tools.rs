@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 
+use crate::commands::local_kuzu;
 use crate::commands::local_mcp::run_server as run_mcp_server;
 use crate::commands::local_serve::run_server as run_http_server;
 use crate::ingestion::{
@@ -128,6 +129,8 @@ struct ImpactArgs {
     repo: Option<String>,
     depth: u32,
     include_tests: bool,
+    relation_types: Vec<String>,
+    min_confidence: f32,
 }
 
 #[derive(Debug)]
@@ -323,7 +326,7 @@ fn parse_context_args(args: &[String]) -> Result<ContextArgs> {
 fn parse_impact_args(args: &[String]) -> Result<ImpactArgs> {
     if args.is_empty() {
         bail!(
-            "Usage: gitnexus impact <target> [--direction upstream|downstream] [--repo <repo>] [--depth <n>] [--include-tests]"
+            "Usage: gitnexus impact <target> [--direction upstream|downstream] [--repo <repo>] [--depth <n>] [--include-tests] [--relation-types <csv>] [--min-confidence <0..1>]"
         );
     }
 
@@ -332,6 +335,8 @@ fn parse_impact_args(args: &[String]) -> Result<ImpactArgs> {
     let mut repo = None;
     let mut depth = DEFAULT_IMPACT_DEPTH;
     let mut include_tests = false;
+    let mut relation_type_inputs = Vec::<String>::new();
+    let mut min_confidence = 0.0f32;
 
     let mut idx = 1usize;
     while idx < args.len() {
@@ -354,10 +359,25 @@ fn parse_impact_args(args: &[String]) -> Result<ImpactArgs> {
                 }
             }
             "--include-tests" => include_tests = true,
+            "--relation-types" | "--relation_types" => {
+                let raw = next_arg(args, &mut idx, flag)?;
+                relation_type_inputs.extend(parse_relation_types(&raw));
+            }
+            "--min-confidence" | "--min_confidence" => {
+                let raw = next_arg(args, &mut idx, flag)?;
+                min_confidence = raw
+                    .parse::<f32>()
+                    .with_context(|| format!("invalid value for --min-confidence: {raw}"))?;
+                if !(0.0..=1.0).contains(&min_confidence) {
+                    bail!("--min-confidence must be within [0, 1]");
+                }
+            }
             other => bail!("unknown impact option: {other}"),
         }
         idx += 1;
     }
+
+    let relation_types = normalize_relation_types(relation_type_inputs);
 
     Ok(ImpactArgs {
         target,
@@ -365,7 +385,45 @@ fn parse_impact_args(args: &[String]) -> Result<ImpactArgs> {
         repo,
         depth,
         include_tests,
+        relation_types,
+        min_confidence,
     })
+}
+
+fn parse_relation_types(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_ascii_uppercase())
+        .collect::<Vec<_>>()
+}
+
+fn normalize_relation_types(inputs: Vec<String>) -> Vec<String> {
+    let defaults = TOOL_REL_TYPES
+        .iter()
+        .map(|item| item.to_string())
+        .collect::<Vec<_>>();
+
+    if inputs.is_empty() {
+        return defaults;
+    }
+
+    let mut seen = HashSet::<String>::new();
+    let mut filtered = Vec::<String>::new();
+    for relation_type in inputs {
+        if !TOOL_REL_TYPES.contains(&relation_type.as_str()) {
+            continue;
+        }
+        if seen.insert(relation_type.clone()) {
+            filtered.push(relation_type);
+        }
+    }
+
+    if filtered.is_empty() {
+        defaults
+    } else {
+        filtered
+    }
 }
 
 fn parse_cypher_args(args: &[String]) -> Result<CypherArgs> {
@@ -549,6 +607,26 @@ fn parse_bool_flag(raw: &str) -> Result<bool> {
 }
 
 fn run_query(args: QueryArgs) -> Result<()> {
+    match local_kuzu::try_run_query(
+        &args.search_query,
+        args.repo.as_deref(),
+        args.context.as_deref(),
+        args.goal.as_deref(),
+        args.limit,
+        args.include_content,
+    ) {
+        Ok(Some(payload)) => {
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!(
+                "GitNexus: native Kuzu query bridge failed, falling back to heuristic engine: {err}"
+            );
+        }
+    }
+
     let graph = load_graph(args.repo.as_deref())?;
     let term_text = format!(
         "{} {} {}",
@@ -734,6 +812,25 @@ fn run_query(args: QueryArgs) -> Result<()> {
 }
 
 fn run_context(args: ContextArgs) -> Result<()> {
+    match local_kuzu::try_run_context(
+        args.name.as_deref(),
+        args.uid.as_deref(),
+        args.file.as_deref(),
+        args.repo.as_deref(),
+        args.include_content,
+    ) {
+        Ok(Some(payload)) => {
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!(
+                "GitNexus: native Kuzu context bridge failed, falling back to heuristic engine: {err}"
+            );
+        }
+    }
+
     let graph = load_graph(args.repo.as_deref())?;
 
     let mut matches = if let Some(uid) = args.uid.as_deref() {
@@ -891,6 +988,31 @@ fn run_context(args: ContextArgs) -> Result<()> {
 }
 
 fn run_impact(args: ImpactArgs) -> Result<()> {
+    let direction = match &args.direction {
+        Direction::Upstream => "upstream",
+        Direction::Downstream => "downstream",
+    };
+    match local_kuzu::try_run_impact(
+        &args.target,
+        direction,
+        args.repo.as_deref(),
+        args.depth,
+        args.include_tests,
+        &args.relation_types,
+        args.min_confidence,
+    ) {
+        Ok(Some(payload)) => {
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!(
+                "GitNexus: native Kuzu impact bridge failed, falling back to heuristic engine: {err}"
+            );
+        }
+    }
+
     let graph = load_graph(args.repo.as_deref())?;
 
     let mut targets = graph
@@ -930,6 +1052,11 @@ fn run_impact(args: ImpactArgs) -> Result<()> {
 
     let mut impacted = Vec::<ImpactItem>::new();
     let mut frontier = vec![target.id.clone()];
+    let relation_type_filter = args
+        .relation_types
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
 
     for depth in 1..=args.depth {
         if frontier.is_empty() {
@@ -944,7 +1071,8 @@ fn run_impact(args: ImpactArgs) -> Result<()> {
             .graph
             .relationships
             .iter()
-            .filter(|rel| TOOL_REL_TYPES.contains(&rel.rel_type.as_str()))
+            .filter(|rel| relation_type_filter.contains(rel.rel_type.as_str()))
+            .filter(|rel| rel.confidence >= args.min_confidence)
         {
             let candidate = match args.direction {
                 Direction::Upstream if frontier_set.contains(&rel.target_id) => {
@@ -1115,8 +1243,6 @@ fn run_impact(args: ImpactArgs) -> Result<()> {
 }
 
 fn run_cypher(args: CypherArgs) -> Result<()> {
-    let graph = load_graph(args.repo.as_deref())?;
-
     if is_write_cypher(&args.query) {
         println!(
             "{}",
@@ -1127,6 +1253,12 @@ fn run_cypher(args: CypherArgs) -> Result<()> {
         return Ok(());
     }
 
+    if let Some(payload) = local_kuzu::try_run_cypher(&args.query, args.repo.as_deref())? {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    let graph = load_graph(args.repo.as_deref())?;
     let table = evaluate_cypher(&graph, &args.query)?;
     let markdown = render_markdown_table(&table);
     let output = json!({

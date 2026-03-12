@@ -16,9 +16,9 @@
 
 ## Rust 已实现功能（阶段 1）
 
-- Rust 原生 CLI 命令：`analyze`、`list`、`status`、`clean`、`query`、`context`、`impact`、`cypher`、`detect-changes`、`rename`、`mcp`、`serve`
+- Rust 原生 CLI 命令：`analyze`、`list`、`status`、`clean`、`setup`、`query`、`context`、`impact`、`cypher`、`detect-changes`、`rename`、`mcp`、`serve`
 - 为兼容性转发到 TypeScript CLI 的命令：
-  - `setup`、`wiki`
+  - `wiki`
   - `augment`、`eval-server`
 - Git 辅助能力：
   - 检测 git 仓库
@@ -57,7 +57,7 @@
   - 原生 `serve` 命令已用 Rust 实现（`axum` + tokio listener，默认 `127.0.0.1:4747`）
   - REST 基线端点覆盖 repos/graph/query/search/file/processes/clusters
   - `/api/mcp` 通过 `rmcp` Streamable HTTP 传输挂载（`StreamableHttpService`，有状态会话）
-  - 会话生命周期与 SSE priming 行为交由 rmcp 传输层处理
+  - 会话生命周期交由 rmcp 传输层处理，Rust 侧增加了传输兼容性归一化
   - 已移除 `local_serve.rs` 中旧的手写 TCP/MCP 路径，避免双轨传输实现
 - 原生 `cypher` 当前支持安全的只读子集：
   - `MATCH ... RETURN ... [LIMIT n]`
@@ -65,6 +65,9 @@
   - `WHERE` 的 `=` / `CONTAINS`（可通过 `AND` 组合）
   - `COUNT(*)` 与列投影（`AS`）
   - 显式阻止写操作
+- `cypher` 的 Kuzu bridge 基线：
+  - 当本地 TypeScript 包可用（`GitNexus/gitnexus`）时，Rust 原生 `cypher` 会优先走 TS Kuzu 运行时，并保持 `{markdown,row_count}` 输出结构
+  - 当本地 TS 包不可用时，回退到 Rust 只读子集 evaluator
 
 ## 当前行为
 
@@ -80,14 +83,27 @@
   - 将仓库注册到 `~/.gitnexus/registry.json`
   - 确保 `.gitnexus` 被写入 `.gitignore`
 - `query` / `context` / `impact` / `cypher` / `detect-changes` / `rename` 现已通过 Rust 原生本地图运行时执行（缓存为 `.gitnexus/graph.json`）。
+- `cypher` 现已具备 Kuzu bridge 路径：
+  - 主路径：本地 TS Kuzu 运行时（可用时）
+  - 回退路径：Rust 本地子集 evaluator
+- `setup` 现已具备 Rust 原生基线（全局编辑器 MCP 配置合并、skills 安装、Claude hooks 合并）。
+- 原生 `impact` 现已支持关系过滤能力基线：
+  - `relationTypes` / `relation_types`：用于过滤遍历关系类型（`CALLS`、`IMPORTS`、`EXTENDS`、`IMPLEMENTS`）
+  - `minConfidence` / `min_confidence`：用于按关系置信度阈值过滤（`0..1`）
+  - 可通过 CLI 参数（`--relation-types`、`--min-confidence`）和 MCP 工具参数使用
 - `mcp` 现已通过 rmcp 支持的 Rust 原生 stdio 传输执行。
 - `serve` 现已通过 Rust 原生 HTTP 服务基线执行。
-- `/api/mcp` 当前运行在 rmcp Streamable HTTP 传输之上（有状态会话、SSE priming、`mcp-session-id` 生命周期由 SDK 传输层处理）。
+- `/api/mcp` 当前运行在 rmcp Streamable HTTP 传输之上（有状态会话、`mcp-session-id` 生命周期由 SDK 传输层处理）。
+- `/api/mcp` 传输兼容性加固（2026-03-12）：
+  - 对 MCP 客户端请求头做归一化（`Accept`/`Content-Type`），降低严格协商失败概率
+  - 关闭 SSE 空 priming 事件（`sse_retry: None`），提升严格解码客户端兼容性
+  - 为 MCP 响应兜底补齐 `Content-Type`，避免 `Unexpected content type: None` 错误
 - `local_serve.rs` 不再保留此前自定义 `/api/mcp` session/SSE/TCP 回退实现；MCP HTTP 仅保留 rmcp。
 - 未迁移命令仍在可用时转发到 TypeScript 实现（优先本地源码/构建，其次回退 `npx gitnexus@latest`）。
-- 图摄取深度对齐、Kuzu 加载、FTS、embeddings 和 wiki 生成尚未迁移。
+- Rust 现已包含原生 `wiki` 基线，可在 `.gitnexus/wiki` 生成静态 markdown 文档。
+- 原生 Rust-only 的 Kuzu 加载、FTS、embeddings 与 wiki 的完整 LLM 对齐能力仍未迁移（`cypher` 当前在可用时走本地 TS Kuzu bridge）。
 
-## 迁移状态快照（2026-03-11）
+## 迁移状态快照（2026-03-12）
 
 基于 Rust（`/src`）与 TypeScript（`/GitNexus/gitnexus/src`）实现的并行对比：
 
@@ -102,9 +118,9 @@
 
 - Rust 原生：
   - `analyze`、`list`、`status`、`clean`
-  - `query`、`context`、`impact`、`cypher`、`detect-changes`、`rename`、`mcp`、`serve`（启发式/本地图运行时基线）
+  - `setup`、`query`、`context`、`impact`、`cypher`、`detect-changes`、`rename`、`mcp`、`serve`、`wiki`（启发式/本地图运行时基线）
 - 转发到 TypeScript：
-  - `setup`、`wiki`
+  - `wiki`
   - `augment`、`eval-server`
 
 ### Rust 已有能力（已确认）
@@ -122,22 +138,37 @@
 ### 相比 TypeScript 的主要差距
 
 - Rust 运行时已覆盖核心工具命令，但仍是启发式实现，尚未达到 TS/Kuzu 的能力深度。
-- TypeScript 实现目前已提供：
-  - 完整的 Tree-sitter 摄取流水线
-  - Kuzu 图物化 + schema 加载
-  - 全文检索（FTS）+ embeddings
-  - 完整的 Express + StreamableHTTP MCP 传输行为
-  - wiki 生成
-  - 由本地图查询支撑的高级图工具（例如 `detect_changes`、`rename`）
+- 当前最大实际差距仍在运行时深度：
+  - TS 以 Kuzu 作为工具/服务查询运行时，而 Rust 当前主要基于 `.gitnexus/graph.json` + 启发式内存遍历。
+  - TS `analyze` 会构建 Kuzu + FTS + 可选 embeddings；Rust `analyze` 当前主要写入元数据/摄取报告，并提示 embeddings 预览版未实现。
+  - TS 的 wiki/augmentation/eval 工作流已较完整；Rust 对这些命令路径仍采用委托。
+
+### 仍未迁移能力（代码级审计）
+
+- 明确未迁移（仍由 TS 委托）：
+  - `wiki`
+  - `augment`
+  - `eval-server`
+- Rust 运行时深度未迁移：
+  - Kuzu 图持久化与查询运行时对齐
+  - FTS 索引构建/查询对齐
+  - embeddings 生成与语义检索对齐
+  - wiki 完整生成流水线对齐（LLM 模块生成/增量重建/gist 发布）
+- 部分迁移（已有 Rust 基线，但仍有对齐缺口）：
+  - `wiki`：Rust 基线当前可生成静态 markdown 与架构摘要，但尚不包含 TS 侧 LLM/增量/gist 能力。
+  - `query`：Rust 结果排序与 TS 的 BM25+semantic 混合检索深度仍有差距。
+  - `cypher`：Rust 当前为安全只读子集，不等价于 TS/Kuzu 的完整查询能力。
+  - `/api/search`：Rust 服务当前经本地 `query` 基线路径，不是 TS 的 hybrid search 行为。
+  - MCP setup/resource 对齐：Rust 已有核心 resources/tools/prompts，但 `gitnexus://setup` 与 staleness 提示仍较 TS 简化。
 
 ### 中文执行摘要
 
 - 相对 TypeScript 的迁移对齐度当前约 **35% 到 45%**。
 - Rust 已有稳定的阶段 1 基线（`analyze/list/status/clean`，以及 git/存储/注册表兼容）。
-- Rust 现已包含 `query/context/impact/cypher/detect-changes/rename/mcp/serve` 的原生基线实现。
+- Rust 现已包含 `setup/query/context/impact/cypher/detect-changes/rename/mcp/serve` 的原生基线实现。
 - 阶段 2/3 的能力已可用，但仍属启发式与部分实现。
-- Rust 端当前最大缺口是 Kuzu 图持久化、FTS、embeddings 与 wiki 生成。
-- 实际含义：命令表面已经更原生，但高级图智能仍主要依赖 TS/Kuzu 能力。
+- Rust 端当前最大缺口仍是 Kuzu 图运行时对齐、FTS/embeddings 对齐，以及 wiki/augment/eval 命令对齐。
+- 实际含义：命令表面已大体原生化，但高级图智能仍主要依赖 TS/Kuzu 能力。
 
 ## 为什么是这种形态
 

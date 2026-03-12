@@ -249,7 +249,12 @@ fn tools_list_result() -> Value {
                     "target": {"type": "string"},
                     "direction": {"type": "string"},
                     "maxDepth": {"type": "number"},
+                    "relationTypes": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
                     "includeTests": {"type": "boolean"},
+                    "minConfidence": {"type": "number"},
                     "repo": {"type": "string"}
                 },
                 "required": ["target", "direction"]
@@ -444,7 +449,13 @@ fn build_impact_args(args: &Value) -> Result<Vec<String>> {
     ];
     push_string_flag(args, "repo", "--repo", &mut out);
     push_u64_flag(args, "maxDepth", "--depth", &mut out);
+    if !push_string_array_csv_flag(args, "relationTypes", "--relation-types", &mut out) {
+        let _ = push_string_array_csv_flag(args, "relation_types", "--relation-types", &mut out);
+    }
     push_bool_switch(args, "includeTests", "--include-tests", &mut out);
+    if !push_f64_flag(args, "minConfidence", "--min-confidence", &mut out) {
+        let _ = push_f64_flag(args, "min_confidence", "--min-confidence", &mut out);
+    }
     Ok(out)
 }
 
@@ -501,6 +512,48 @@ fn push_u64_flag(args: &Value, key: &str, flag: &str, out: &mut Vec<String>) {
         out.push(flag.to_string());
         out.push(value.to_string());
     }
+}
+
+fn push_f64_flag(args: &Value, key: &str, flag: &str, out: &mut Vec<String>) -> bool {
+    if let Some(value) = args.get(key).and_then(Value::as_f64) {
+        out.push(flag.to_string());
+        out.push(value.to_string());
+        true
+    } else {
+        false
+    }
+}
+
+fn push_string_array_csv_flag(args: &Value, key: &str, flag: &str, out: &mut Vec<String>) -> bool {
+    let Some(value) = args.get(key) else {
+        return false;
+    };
+
+    let values = if let Some(items) = value.as_array() {
+        items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>()
+    } else if let Some(raw) = value.as_str() {
+        raw.split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    if values.is_empty() {
+        return false;
+    }
+
+    out.push(flag.to_string());
+    out.push(values.join(","));
+    true
 }
 
 fn push_bool_switch(args: &Value, key: &str, flag: &str, out: &mut Vec<String>) {

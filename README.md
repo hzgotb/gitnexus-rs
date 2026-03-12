@@ -16,9 +16,9 @@ This repository includes AI-driven migration work and is designed to keep the pr
 
 ## Implemented in Rust (phase 1)
 
-- Native CLI commands: `analyze`, `list`, `status`, `clean`, `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve`
+- Native CLI commands: `analyze`, `list`, `status`, `clean`, `setup`, `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve`
 - Delegated CLI commands (forwarded to the TypeScript CLI for compatibility):
-  - `setup`, `wiki`
+  - `wiki`
   - `augment`, `eval-server`
 - Git helpers:
   - detect git repo
@@ -57,7 +57,7 @@ This repository includes AI-driven migration work and is designed to keep the pr
   - native `serve` command implemented in Rust (`axum` + tokio listener, default `127.0.0.1:4747`)
   - REST baseline endpoints for repos/graph/query/search/file/processes/clusters
   - `/api/mcp` mounted with `rmcp` Streamable HTTP server transport (`StreamableHttpService`, stateful sessions)
-  - session lifecycle and SSE priming behavior delegated to rmcp transport layer
+  - session lifecycle delegated to rmcp transport layer with Rust-side transport compatibility normalization
   - removed legacy hand-written TCP/MCP code paths from `local_serve.rs` to avoid dual transport implementations
 - Native `cypher` currently supports a safe read-only subset:
   - `MATCH ... RETURN ... [LIMIT n]`
@@ -65,6 +65,9 @@ This repository includes AI-driven migration work and is designed to keep the pr
   - `WHERE` with `=` / `CONTAINS` (combined by `AND`)
   - `COUNT(*)` and column projection with `AS`
   - write operations are explicitly blocked
+- Kuzu bridge baseline for `cypher`:
+  - when local TypeScript package is available (`GitNexus/gitnexus`), Rust-native `cypher` first executes via TS Kuzu runtime and preserves `{markdown,row_count}` output shape
+  - if local TS package is unavailable, fallback to Rust read-only subset evaluator
 
 ## Current behavior
 
@@ -80,14 +83,27 @@ This repository includes AI-driven migration work and is designed to keep the pr
   - registers repo in `~/.gitnexus/registry.json`
   - ensures `.gitnexus` is in `.gitignore`
 - `query` / `context` / `impact` / `cypher` / `detect-changes` / `rename` now execute with Rust-native local graph runtime (`.gitnexus/graph.json` cache).
+- `cypher` now has a Kuzu bridge path:
+  - primary path: local TS Kuzu runtime (when available)
+  - fallback path: Rust local evaluator subset
+- `setup` now executes with a Rust-native baseline (global editor MCP config merge, skills installation, Claude hook merge).
+- Native `impact` now supports relation filtering parity baseline:
+  - `relationTypes` / `relation_types` to filter traversal edges (`CALLS`, `IMPORTS`, `EXTENDS`, `IMPLEMENTS`)
+  - `minConfidence` / `min_confidence` to filter by edge confidence threshold (`0..1`)
+  - available via both CLI flags (`--relation-types`, `--min-confidence`) and MCP tool arguments
 - `mcp` now executes with rmcp-backed Rust-native stdio transport.
 - `serve` now executes with a Rust-native HTTP server baseline.
-- `/api/mcp` now runs on rmcp Streamable HTTP transport (stateful sessions, SSE priming, `mcp-session-id` lifecycle handled by SDK transport).
+- `/api/mcp` now runs on rmcp Streamable HTTP transport (stateful sessions, `mcp-session-id` lifecycle handled by SDK transport).
+- `/api/mcp` transport compatibility hardening (2026-03-12):
+  - request header normalization for MCP clients (`Accept`/`Content-Type`) to reduce strict content-negotiation failures
+  - SSE priming empty event disabled (`sse_retry: None`) to improve strict client decoder compatibility
+  - fallback `Content-Type` is ensured on MCP responses to avoid `Unexpected content type: None` client errors
 - `local_serve.rs` no longer keeps the previous custom `/api/mcp` session/SSE/TCP fallback implementation; MCP HTTP is rmcp-only.
 - Non-migrated commands are still delegated to the TypeScript implementation when available (local source/build first, then `npx gitnexus@latest` fallback).
-- Graph ingestion parity, Kuzu loading, FTS, embeddings, and wiki generation are not migrated yet.
+- Rust now includes a native `wiki` baseline that generates static markdown docs under `.gitnexus/wiki`.
+- Full native Kuzu loading (Rust-only), FTS, embeddings, and full wiki/LLM parity are not migrated yet (`cypher` currently uses a local TS Kuzu bridge path when available).
 
-## Migration status snapshot (2026-03-11)
+## Migration status snapshot (2026-03-12)
 
 Based on a side-by-side comparison between Rust (`/src`) and TypeScript (`/GitNexus/gitnexus/src`) implementations:
 
@@ -102,9 +118,9 @@ Based on a side-by-side comparison between Rust (`/src`) and TypeScript (`/GitNe
 
 - Native in Rust:
   - `analyze`, `list`, `status`, `clean`
-  - `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve` (heuristic/local runtime baseline)
+  - `setup`, `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve`, `wiki` (heuristic/local runtime baseline)
 - Delegated to TypeScript:
-  - `setup`, `wiki`
+  - `wiki`
   - `augment`, `eval-server`
 
 ### What is already in Rust (confirmed)
@@ -122,22 +138,37 @@ Based on a side-by-side comparison between Rust (`/src`) and TypeScript (`/GitNe
 ### Largest current gap vs TypeScript
 
 - Rust runtime is now available for core tool commands, but it is heuristic and does **not** yet match TS/Kuzu feature depth.
-- The TypeScript implementation already provides:
-  - full Tree-sitter based ingestion pipeline
-  - Kuzu graph materialization + schema loading
-  - full-text search (FTS) + embeddings
-  - full Express + StreamableHTTP MCP transport behavior
-  - wiki generation
-  - advanced graph tools (e.g. `detect_changes`, `rename`) backed by local graph queries
+- The largest practical gap is still runtime depth:
+  - TS uses Kuzu as the graph runtime for tool/server queries, while Rust tooling currently runs on `.gitnexus/graph.json` + heuristic in-memory traversal.
+  - TS `analyze` builds Kuzu + FTS + optional embeddings; Rust `analyze` currently writes metadata + ingestion report and prints that embeddings are not implemented in preview.
+  - TS wiki/augmentation/eval workflows are feature-complete; Rust still delegates those command paths.
+
+### Remaining migration gaps (code-level audit)
+
+- Explicitly not migrated (still TS-delegated):
+  - `wiki`
+  - `augment`
+  - `eval-server`
+- Not migrated in Rust runtime depth:
+  - Kuzu graph persistence and query runtime parity
+  - FTS index build/query parity
+  - embedding generation and semantic search parity
+  - full wiki generation pipeline parity (LLM-driven module synthesis/incremental regeneration/gist publishing)
+- Partially migrated (Rust baseline exists, but parity gaps remain):
+  - `wiki`: Rust baseline currently generates static markdown docs and architecture summaries, but does not yet include TS-level LLM/incremental/gist features.
+  - `query`: Rust implementation does not yet match TS hybrid BM25+semantic ranking depth.
+  - `cypher`: Rust currently supports a safe read-only subset, not full TS/Kuzu query capability.
+  - `/api/search`: Rust server path currently routes through local `query` baseline rather than TS hybrid search behavior.
+  - MCP setup/resource parity: Rust provides equivalent core resources/tools/prompts, but `gitnexus://setup` and staleness-oriented context hints are still simplified vs TS.
 
 ### English executive summary
 
 - Migration parity vs TypeScript is currently around **35% to 45%**.
 - Rust has a stable Phase 1 baseline (`analyze/list/status/clean`, git/storage/registry compatibility).
-- Rust now includes native baseline implementations of `query/context/impact/cypher/detect-changes/rename/mcp/serve`.
+- Rust now includes native baseline implementations of `setup/query/context/impact/cypher/detect-changes/rename/mcp/serve`.
 - Phase 2/3 capabilities are usable but still heuristic and partial.
-- The biggest missing Rust pieces are Kuzu graph persistence, FTS, embeddings, and wiki generation.
-- Practical implication: command surface is more native than before, but advanced graph intelligence is still TS/Kuzu-backed.
+- The biggest missing Rust pieces remain Kuzu graph runtime parity, FTS/embeddings parity, and wiki/augment/eval command parity.
+- Practical implication: command surface is now largely native, but advanced graph intelligence is still TS/Kuzu-backed.
 
 ## Why this shape
 

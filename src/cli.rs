@@ -105,6 +105,10 @@ enum Commands {
         depth: Option<u32>,
         #[arg(long = "include-tests")]
         include_tests: bool,
+        #[arg(long = "relation-types", value_delimiter = ',')]
+        relation_types: Option<Vec<String>>,
+        #[arg(long = "min-confidence")]
+        min_confidence: Option<f32>,
     },
     Cypher {
         query: String,
@@ -214,6 +218,8 @@ pub fn run() -> Result<()> {
             repo,
             depth,
             include_tests,
+            relation_types,
+            min_confidence,
         } => impact::run(
             &target,
             ImpactOptions {
@@ -221,6 +227,8 @@ pub fn run() -> Result<()> {
                 repo,
                 depth,
                 include_tests,
+                relation_types,
+                min_confidence,
             },
         ),
         Commands::Cypher { query, repo } => cypher::run(&query, CypherOptions { repo }),
