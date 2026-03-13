@@ -16,9 +16,10 @@
 
 ## Rust 已实现功能（阶段 1）
 
-- Rust 原生 CLI 命令：`analyze`、`list`、`status`、`clean`、`setup`、`query`、`context`、`impact`、`cypher`、`detect-changes`、`rename`、`mcp`、`serve`、`wiki`
-- 为兼容性转发到 TypeScript CLI 的命令：
-  - `augment`、`eval-server`
+- Rust 原生 CLI 命令：`analyze`、`list`、`status`、`clean`、`setup`、`query`、`context`、`impact`、`cypher`、`detect-changes`、`rename`、`mcp`、`serve`、`wiki`、`augment`、`eval-server`
+- 阶段 1 命令可选 TypeScript 回退（默认关闭，显式开启）：
+  - `GITNEXUS_USE_TS_AUGMENT=1`
+  - `GITNEXUS_USE_TS_EVAL_SERVER=1`
 - Git 辅助能力：
   - 检测 git 仓库
   - 解析 git 根目录
@@ -35,10 +36,32 @@
   - 支持源码扩展名的语言识别
   - 结构图提取（`Folder`/`File` + `CONTAINS`）
   - 基于启发式的符号提取基线（`Function`/`Class`/`Interface`/`Struct`/`Enum`/`Trait`）
-  - 基于启发式的 TypeScript/JavaScript 相对导入提取（`IMPORTS`）
+  - 导入提取的 advanced resolution 基线（`IMPORTS`）：
+    - 相对导入（`./`、`../`）
+    - `tsconfig` `paths` 别名改写
+    - `baseUrl` 绝对路径 specifier 解析
+    - 基于 suffix-index 的 module-context path-like 回退解析
+    - `go.mod` module-path 本地包解析（Go）
+    - `composer.json` `autoload.psr-4` 命名空间解析（PHP）
+    - `.csproj` `RootNamespace` 命名空间解析（C#）
+    - 关系能力拆分基线：Go/C# 仅做 `IMPORTS`；TS/JS 与 PHP 已具备路由派生 `CALLS` 提取基线
   - 基于启发式的 TypeScript/JavaScript 调用提取（`CALLS`）
+  - 基于启发式的 TypeScript/JavaScript 路由调用提取（`CALLS`，面向 route-like 文件）：
+    - 路由方法模式：`.get/.post/.put/.patch/.delete/.options/.head/.all/.use`
+    - handler 形态：标识符、成员表达式尾部、数组 handlers、wrapper 调用参数
+    - 产出文件节点到 handler 符号的 `CALLS` 边（`File:<route file> -> handler`）
+  - 基于启发式的 Laravel 路由调用提取（`CALLS`，PHP 路由文件）：
+    - `Route::...([Controller::class, 'method'])`
+    - `Route::resource(...)` / `Route::apiResource(...)` 映射到控制器约定动作
   - 基于启发式的 TypeScript/JavaScript 继承提取（`EXTENDS`/`IMPLEMENTS`）
   - 从 `File` 节点到提取符号的 `DEFINES` 边
+  - 有界分块执行基线：
+    - 通过 worker-pool 按阶段并行处理 `symbols` / `imports` / `calls` / `heritage` 分块
+    - 内存/文件预算控制（`PARSE_CHUNK_MAX_BYTES`、`PARSE_CHUNK_MAX_FILES`）
+    - 有界 worker 结果背压队列（`sync_channel`），限制 chunk 结果排队内存
+    - 首个 chunk 解析错误后停止继续调度新 chunk（fail-fast）
+    - 进度回调 API（`run_ingestion_pipeline_with_progress`）
+    - 分块 `import` 解析保持全仓上下文，避免跨 chunk 漏解析
 - 摄取报告输出：
   - `.gitnexus/ingestion.json`
 
@@ -75,9 +98,16 @@
   - 查找仓库根目录
   - 按忽略规则与体积规则扫描仓库文件
   - 构建结构图与文件到符号的 `DEFINES` 链接
-  - 添加启发式 TypeScript/JavaScript 相对导入 `IMPORTS` 边
+  - 添加 `IMPORTS` 边（advanced import resolution 基线）：
+    - TypeScript/JavaScript：相对导入 + `tsconfig` `paths` + `baseUrl` + module-context suffix 回退
+    - Go：`go.mod` module-path 本地包解析
+    - PHP：`composer.json` `autoload.psr-4` 命名空间解析
+    - C#：`.csproj` `RootNamespace` 命名空间解析
   - 添加启发式 TypeScript/JavaScript 函数/类调用 `CALLS` 边
+  - 为 TypeScript/JavaScript route-like 文件添加路由派生 `CALLS` 边（路由文件 -> 已解析 handler）
+  - 为 Laravel 路由文件（`routes/*.php`）添加路由派生 `CALLS` 边（路由文件 -> 控制器方法）
   - 添加启发式 TypeScript/JavaScript 继承 `EXTENDS`/`IMPLEMENTS` 边
+  - 以有界 worker-pool 分块方式执行解析（按阶段），并支持可选进度回调、结果背压与首错停止调度
   - 写入/更新 `.gitnexus/meta.json` 的文件/节点/边统计（`communities` / `processes` 当前为基于关系提取的启发式估算）
   - 写入 `.gitnexus/ingestion.json` 摄取统计
   - 将仓库注册到 `~/.gitnexus/registry.json`
@@ -97,7 +127,20 @@
   - 关闭 SSE 空 priming 事件（`sse_retry: None`），提升严格解码客户端兼容性
   - 为 MCP 响应兜底补齐 `Content-Type`，避免 `Unexpected content type: None` 错误
 - `local_serve.rs` 不再保留此前自定义 `/api/mcp` session/SSE/TCP 回退实现；MCP HTTP 仅保留 rmcp。
-- 未迁移命令仍在可用时转发到 TypeScript 实现（优先本地源码/构建，其次回退 `npx gitnexus@latest`），主要为 `augment` 与 `eval-server`。
+- `augment` 现已具备 Rust 原生快路径（短输入直接返回、失败静默、兼容 hook 的 stderr 输出），可通过 `GITNEXUS_USE_TS_AUGMENT=1` 显式回退 TS。
+- `eval-server` 现已具备 Rust 原生 HTTP 实现（`/tool/:name`、`/health`、`/shutdown`、idle-timeout 自动退出），可通过 `GITNEXUS_USE_TS_EVAL_SERVER=1` 显式回退 TS。
+- Phase 1 对齐基线现已补充单元测试覆盖：`augment` 输出整形、`eval-server` formatter/next-step hint。
+- Phase 1 对齐基线现已补充集成级契约测试覆盖：
+  - `eval-server` 真实 HTTP 端点行为（`/health`、`/tool/:name`、`/shutdown`）
+  - `augment` hook 行为（`stderr` 输出、短输入 no-op、后端失败静默）
+- Phase 2 基线已开始进行 ingestion 模块拆分（保持行为不变）：
+  - `src/ingestion/scan.rs`（文件系统扫描 + 语言识别/忽略规则）
+  - `src/ingestion/symbols.rs`（多语言符号抽取）
+  - `src/ingestion/relations.rs`（import/call/heritage 解析链路 + 关系解析 helper + advanced TS/JS import resolution 基线）
+  - `src/ingestion/summaries.rs`（community/process 摘要构建）
+  - `src/ingestion/graph.rs`（结构图节点/边物化）
+  - `src/ingestion/parser_loader.rs`（语言能力矩阵 + parser strategy 抽象基线）
+  - `run_ingestion_pipeline_with_progress` 已提供分块执行基线（有界 chunk planner + worker-pool 分阶段执行 + 分阶段进度回调 + 有界结果背压 + 首错停止调度）
 - Rust 现已包含原生 `wiki` 基线，可在 `.gitnexus/wiki` 生成静态 markdown 文档。
 - `analyze` 里的 Rust 原生 Kuzu 物化/加载、FTS、embeddings 与 wiki 的完整 LLM 对齐能力仍未迁移。
 

@@ -16,9 +16,10 @@ This repository includes AI-driven migration work and is designed to keep the pr
 
 ## Implemented in Rust (phase 1)
 
-- Native CLI commands: `analyze`, `list`, `status`, `clean`, `setup`, `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve`, `wiki`
-- Delegated CLI commands (forwarded to the TypeScript CLI for compatibility):
-  - `augment`, `eval-server`
+- Native CLI commands: `analyze`, `list`, `status`, `clean`, `setup`, `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve`, `wiki`, `augment`, `eval-server`
+- Optional TypeScript fallback for phase-1 commands (explicit opt-in):
+  - `GITNEXUS_USE_TS_AUGMENT=1`
+  - `GITNEXUS_USE_TS_EVAL_SERVER=1`
 - Git helpers:
   - detect git repo
   - resolve git root
@@ -35,10 +36,32 @@ This repository includes AI-driven migration work and is designed to keep the pr
   - language detection for supported source file extensions
   - structure graph extraction (`Folder`/`File` + `CONTAINS`)
   - heuristic parsing baseline for symbol extraction (`Function`/`Class`/`Interface`/`Struct`/`Enum`/`Trait`)
-  - heuristic TypeScript/JavaScript relative import extraction (`IMPORTS`)
+  - Import extraction with advanced resolution baseline (`IMPORTS`):
+    - relative imports (`./`, `../`)
+    - `tsconfig` `paths` alias rewriting
+    - `baseUrl` absolute specifier resolution
+    - suffix-index module-context fallback for path-like imports
+    - `go.mod` module-path local package resolution (Go)
+    - `composer.json` `autoload.psr-4` namespace resolution (PHP)
+    - `.csproj` `RootNamespace` namespace resolution (C#)
+    - relation capability split baseline: Go/C# are import-only; TS/JS and PHP have route-derived `CALLS` extraction baselines
   - heuristic TypeScript/JavaScript call extraction (`CALLS`)
+  - heuristic TypeScript/JavaScript route call extraction (`CALLS`) for route-like files:
+    - route method patterns: `.get/.post/.put/.patch/.delete/.options/.head/.all/.use`
+    - handler forms: identifier, member tail, array handlers, wrapper-call arguments
+    - emits file-node to handler-symbol `CALLS` edges (`File:<route file> -> handler`)
+  - heuristic Laravel route call extraction (`CALLS`) for PHP route files:
+    - `Route::...([Controller::class, 'method'])`
+    - `Route::resource(...)` / `Route::apiResource(...)` to conventional controller actions
   - heuristic TypeScript/JavaScript inheritance extraction (`EXTENDS`/`IMPLEMENTS`)
   - `DEFINES` edges from `File` nodes to extracted symbols
+  - bounded chunked ingestion execution baseline:
+    - worker-pool parallel stage-wise chunking for `symbols` / `imports` / `calls` / `heritage`
+    - memory/file budget controls (`PARSE_CHUNK_MAX_BYTES`, `PARSE_CHUNK_MAX_FILES`)
+    - bounded worker-result backpressure queue (`sync_channel`) to cap queued chunk outputs
+    - fail-fast scheduling stop after first chunk parse error
+    - progress callback API (`run_ingestion_pipeline_with_progress`)
+    - chunked import parsing keeps full-repo resolution context to avoid cross-chunk misses
 - Ingestion report output:
   - `.gitnexus/ingestion.json`
 
@@ -75,9 +98,16 @@ This repository includes AI-driven migration work and is designed to keep the pr
   - finds repository root
   - scans repository files using ignore and size rules
   - builds structure graph and file-to-symbol `DEFINES` links
-  - adds heuristic `IMPORTS` edges for TypeScript/JavaScript relative imports
+  - adds `IMPORTS` edges with advanced import resolution baseline:
+    - TypeScript/JavaScript: relative + `tsconfig` `paths` + `baseUrl` + module-context suffix fallback
+    - Go: `go.mod` module-path local package resolution
+    - PHP: `composer.json` `autoload.psr-4` namespace resolution
+    - C#: `.csproj` `RootNamespace` namespace resolution
   - adds heuristic `CALLS` edges for TypeScript/JavaScript function/class calls
+  - adds heuristic route-derived `CALLS` edges for TypeScript/JavaScript route-like files to resolved handlers
+  - adds heuristic route-derived `CALLS` edges for Laravel route files (`routes/*.php`) to resolved controller methods
   - adds heuristic `EXTENDS`/`IMPLEMENTS` edges for TypeScript/JavaScript inheritance
+  - executes parsing in bounded worker-pool chunks (stage-wise) with optional progress callback support, bounded result backpressure, and fail-fast stop on first chunk parse error
   - writes/updates `.gitnexus/meta.json` with file/node/edge stats (`communities` / `processes` are heuristic estimates based on current relation extraction)
   - writes `.gitnexus/ingestion.json` with ingestion stats
   - registers repo in `~/.gitnexus/registry.json`
@@ -97,7 +127,20 @@ This repository includes AI-driven migration work and is designed to keep the pr
   - SSE priming empty event disabled (`sse_retry: None`) to improve strict client decoder compatibility
   - fallback `Content-Type` is ensured on MCP responses to avoid `Unexpected content type: None` client errors
 - `local_serve.rs` no longer keeps the previous custom `/api/mcp` session/SSE/TCP fallback implementation; MCP HTTP is rmcp-only.
-- Non-migrated commands are still delegated to the TypeScript implementation when available (local source/build first, then `npx gitnexus@latest` fallback), primarily `augment` and `eval-server`.
+- `augment` now runs with a Rust-native fast path (short input no-op, graceful failure, hook-compatible stderr output), with optional TS fallback via `GITNEXUS_USE_TS_AUGMENT=1`.
+- `eval-server` now runs with a Rust-native HTTP implementation (`/tool/:name`, `/health`, `/shutdown`, idle-timeout auto-exit), with optional TS fallback via `GITNEXUS_USE_TS_EVAL_SERVER=1`.
+- Phase 1 parity baseline now includes unit coverage for `augment` output shaping and `eval-server` formatter/next-step hints.
+- Phase 1 baseline integration contract tests now cover:
+  - `eval-server` real HTTP endpoint behavior (`/health`, `/tool/:name`, `/shutdown`)
+  - `augment` hook behavior (`stderr` output, short-input no-op, backend-failure silent path)
+- Phase 2 baseline has started ingestion module splitting without behavior change:
+  - `src/ingestion/scan.rs` (filesystem walking + language/ignore filters)
+  - `src/ingestion/symbols.rs` (multi-language symbol extraction)
+  - `src/ingestion/relations.rs` (import/call/heritage parsing pipeline + relation parsing helpers + advanced TS/JS import resolution baseline)
+  - `src/ingestion/summaries.rs` (community/process summary construction)
+  - `src/ingestion/graph.rs` (structure graph node/edge materialization)
+  - `src/ingestion/parser_loader.rs` (language capability matrix + parser strategy abstraction baseline)
+  - chunked execution baseline in `run_ingestion_pipeline_with_progress` (bounded chunk planner + worker-pool stage execution + per-stage progress callback + bounded result backpressure + fail-fast scheduling stop on first parse error)
 - Rust now includes a native `wiki` baseline that generates static markdown docs under `.gitnexus/wiki`.
 - Full native Kuzu materialization/loading in `analyze`, FTS, embeddings, and full wiki/LLM parity are not migrated yet.
 

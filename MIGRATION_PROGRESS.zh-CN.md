@@ -34,6 +34,7 @@ Last updated: `2026-03-12`
   - 按忽略规则与文件大小规则扫描仓库
   - 启发式符号提取
   - 启发式 `DEFINES`、`IMPORTS`、`CALLS`、`EXTENDS`、`IMPLEMENTS` 边
+  - 分阶段分块并行解析（worker-pool）+ 有界结果背压 + 首错停止继续调度
   - 启发式 community/process 摘要
   - 摄取报告输出（`.gitnexus/ingestion.json`）
 

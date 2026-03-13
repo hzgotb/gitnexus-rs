@@ -15,7 +15,7 @@ This document is a TS-baseline audit:
 ### MCP Evidence Snapshot (2026-03-12)
 
 - TS ingestion module size: `20` files (`GitNexus/gitnexus/src/core/ingestion/**`)
-- Rust ingestion module size: `1` file (`src/ingestion/mod.rs`)
+- Rust ingestion module size: `7` files (`src/ingestion/{mod,scan,symbols,relations,summaries,graph,parser_loader}.rs`)
 - TS embeddings module size: `5` files (`.../core/embeddings/**`)
 - TS search module size: `2` files (`.../core/search/**`)
 - TS wiki module size: `5` files (`.../core/wiki/**`)
@@ -59,16 +59,24 @@ The following follows the project migration rule sequence (Phase 1 -> Phase 6).
 
 Goal: Remove remaining TS runtime dependency at CLI primitive level.
 
-Remaining NOT Rust-only items:
+Status: Completed (`2026-03-12`).
 
-1. `augment` command is TS delegated (`src/commands/augment.rs` -> `run_ts_cli("augment", ...)`).
-2. `eval-server` command is TS delegated (`src/commands/eval_server.rs` -> `run_ts_cli("eval-server", ...)`).
+Completed items:
+
+1. `augment` now has a Rust-native fast path (hook-safe stderr contract, graceful failure behavior).
+2. `eval-server` now has a Rust-native HTTP server path (`/tool/:name`, `/health`, `/shutdown`, idle timeout).
+3. TS fallback is preserved as explicit opt-in (no longer default runtime path):
+   - `GITNEXUS_USE_TS_AUGMENT=1`
+   - `GITNEXUS_USE_TS_EVAL_SERVER=1`
 
 Steps:
 
-1. Implement Rust-native `augment` fast-path (hook-safe, stderr output contract, graceful failure behavior aligned with TS).
-2. Implement Rust-native `eval-server` (LLM-friendly formatter output parity for `query/context/impact/cypher/detect_changes/rename`).
-3. Keep TS fallback behind explicit feature flag (instead of default runtime dependency).
+1. Keep TS fallback flags for emergency rollback only.
+2. Baseline unit coverage for `augment` output shape and `eval-server` formatter/hint behavior is now in place (`2026-03-12`).
+3. Baseline endpoint/hook integration parity is now in place (`2026-03-12`):
+   - `eval-server` real HTTP endpoint contract (`/health`, `/tool/:name`, `/shutdown`)
+   - `augment` `stderr` / short-input no-op / backend-failure silent behavior
+4. Remove fallback flags after Phase 6 parity confidence gates are met.
 
 ### Phase 2: Ingestion Pipeline Parity
 
@@ -77,17 +85,44 @@ Goal: Move from heuristic single-file pipeline to TS-equivalent ingestion depth.
 Remaining NOT Rust-only items:
 
 1. Tree-sitter parser-loader capability parity (language availability and parser management).
-2. Chunked parse pipeline + worker pool style processing.
-3. Import resolution context parity (tsconfig paths / go module / composer / csproj style resolution paths from TS side).
-4. Route extraction and richer call/heritage extraction parity.
+2. Chunked parse pipeline parity is baseline-implemented:
+   - Done baseline: bounded chunk planner (`max bytes` + `max files`) with stage-wise chunk execution for symbols/imports/calls/heritage.
+   - Done baseline: progress callback contract per stage/chunk (`Symbols` / `Imports` / `Calls` / `Heritage`).
+   - Done baseline: worker-pool style parallel chunk execution (parallelism derived from host CPU availability).
+   - Done baseline: bounded worker-result backpressure (`sync_channel`) and fail-fast dispatch stop on first chunk error.
+   - Remaining gap: TS-equivalent per-worker sub-batch timeout/retry tuning is not yet ported.
+3. Import resolution context parity is now baseline-implemented for non-Rust runtime paths:
+   - TypeScript/JavaScript: `tsconfig` `paths` + `baseUrl` alias/absolute resolution and suffix-based module-context fallback.
+   - Go: `go.mod` module-path-based local package import resolution.
+   - PHP: `composer.json` `autoload.psr-4` namespace-to-path resolution.
+   - C#: `.csproj` `RootNamespace`-based using-namespace resolution.
+   - Remaining gap: richer parser-backed import semantics (multi-config/workspace edge cases) still not TS-equivalent.
+4. Route extraction and richer call/heritage extraction parity is partial:
+   - Done baseline: Laravel `routes/*.php` to controller-method `CALLS` extraction (`Route::...([Controller::class, 'method'])`, `resource`, `apiResource`).
+   - Done baseline: TypeScript/JavaScript route-like files now emit route-derived `CALLS` edges from file nodes to resolved handlers for common method patterns (`.get/.post/.put/.patch/.delete/.options/.head/.all/.use`) and common handler forms (identifier/member/array/wrapper arguments).
+   - Remaining gap: deeper parser-backed framework semantics (multi-line chained routers, advanced decorators/macros, framework-specific conventions) is still not TS-equivalent.
 5. Community/process processors parity (quality and metadata depth).
 
 Steps:
 
 1. Split `src/ingestion/mod.rs` into processors aligned with TS pipeline stages.
+   - Baseline split-in-progress (`2026-03-12`): `scan`, `symbols`, `relations`, `summaries`, `graph`, and `parser_loader` were extracted into:
+     - `src/ingestion/scan.rs`
+     - `src/ingestion/symbols.rs`
+     - `src/ingestion/relations.rs`
+     - `src/ingestion/summaries.rs`
+     - `src/ingestion/graph.rs`
+     - `src/ingestion/parser_loader.rs`
+   - `relations.rs` now owns import/call/heritage helper parsing functions (no longer cross-calling helper impls in `mod.rs`).
+   - A baseline language capability matrix is introduced via `parser_loader` (call/heritage extraction remains TS/JS-only; import extraction baseline now extends to Go/PHP/C#).
+   - `run_ingestion_pipeline` behavior is unchanged (all tests passing) while modular boundaries are introduced.
 2. Introduce parser-loader abstraction and language capability matrix.
 3. Add chunked parsing with bounded memory budget and progress callbacks.
-4. Port advanced import/call/heritage processing and route extraction.
+   - Baseline completed (`2026-03-12`): `run_ingestion_pipeline_with_progress` now performs stage-wise chunked parsing and emits per-chunk progress events.
+   - Baseline completed (`2026-03-12`): stage-wise chunk processing now executes via a worker-pool model.
+   - Baseline completed (`2026-03-12`): worker result collection now uses bounded backpressure and stops scheduling new chunks after the first parse error.
+   - Import parsing in chunk mode preserves full-repo resolution context via `parse_imports_for_sources(all_files, source_files)` to avoid cross-chunk misses.
+4. Port remaining advanced call/heritage processing and deeper framework-specific route extraction.
 5. Port community/process detection with deterministic output schema.
 
 ### Phase 3: Graph Persistence (Kuzu + Schema + Loaders)
@@ -131,14 +166,14 @@ Goal: Full runtime parity for tool/resource/prompt/server behavior.
 Remaining NOT Rust-only items:
 
 1. MCP resources/prompts/setup guidance parity is still simplified compared to TS.
-2. Eval-focused serving path (`eval-server`) is not Rust-native yet.
-3. `augment` hook workflow is not Rust-native yet.
+2. Compatibility hardening for `eval-server` output contract across eval clients is incomplete.
+3. Compatibility hardening for `augment` hook output contract across host tools is incomplete.
 
 Steps:
 
 1. Complete MCP resource/prompt parity (including setup and staleness hints).
-2. Port eval-server endpoint contract and formatter behavior.
-3. Port augment engine behavior used by hook workflow.
+2. Expand `eval-server` compatibility tests from baseline endpoint contract to multi-client edge cases.
+3. Expand `augment` compatibility tests from baseline hook contract to host-specific integration matrix.
 4. Add compatibility tests for Cursor/Claude/OpenCode integrations.
 
 ### Phase 6: Parity Validation and Rollout
@@ -163,10 +198,40 @@ Steps:
 1. Rust native tool runtime path exists for `query/context/impact/cypher/detect-changes/rename/mcp/serve` through local tool dispatcher.
 2. Rust query/context/impact/cypher have Kuzu bridge path with heuristic fallback path.
 3. Rust `impact` already exposes relation filters and confidence threshold controls (`relation_types`, `min_confidence`) in CLI/MCP surface.
+4. Rust-native `augment` and `eval-server` paths are now the default runtime path, with TS fallback gated by:
+   - `GITNEXUS_USE_TS_AUGMENT=1`
+   - `GITNEXUS_USE_TS_EVAL_SERVER=1`
+5. Phase 1 baseline integration contract tests were added for `eval-server` HTTP endpoints and `augment` hook behavior.
+6. Phase 2 baseline module split expanded for ingestion (`scan` + `symbols` + `relations` + `summaries` + `graph` + `parser_loader`) with behavior-preserving wrappers and a language capability matrix baseline.
+7. `relations::parse_imports` includes advanced import resolution baseline:
+   - `tsconfig` alias resolution (`compilerOptions.paths`)
+   - `baseUrl` absolute specifier resolution
+   - suffix-index module-context fallback for non-relative path-like imports
+   - `go.mod` module-path local package resolution (Go)
+   - `composer.json` `autoload.psr-4` namespace resolution (PHP)
+   - `.csproj` `RootNamespace` namespace resolution (C#)
+   - relation capability split: Go/PHP/C# are import-only for relations (call/heritage still TS/JS-only)
+   - covered by ingestion tests for alias/baseUrl/module-context + Go/PHP/C# namespace/module cases
+8. Phase 2 ingestion execution now has chunk/progress baseline:
+   - bounded chunk planner (`PARSE_CHUNK_MAX_BYTES`, `PARSE_CHUNK_MAX_FILES`)
+   - worker-pool parallel chunk processing (`symbols` / `imports` / `calls` / `heritage`)
+   - public progress callback path (`run_ingestion_pipeline_with_progress`)
+   - chunked import parsing keeps global import resolution context and is covered by regression tests.
+9. Route extraction baseline is started in Rust calls pipeline:
+   - Laravel route files (`routes/*.php`) now emit route-derived `CALLS` edges from file nodes to resolved controller methods.
+   - covered by ingestion contract test for `Route::get(..., [Controller::class, 'method'])`.
+10. TypeScript/JavaScript route-derived `CALLS` baseline is now added:
+   - route-like files now emit `CALLS` edges from `File:<route file>` to resolved handlers for common route-method APIs (`.get/.post/.put/.patch/.delete/.options/.head/.all/.use`).
+   - baseline handler form coverage includes identifier/member/array/wrapper-call arguments.
+   - covered by ingestion contract test for route file handler resolution (`src/routes.ts` -> imported handlers).
+11. Phase 2 chunk worker scheduling/backpressure baseline was hardened:
+    - bounded worker-result channel in chunk execution to reduce peak queued memory under heavy extraction output.
+    - fail-fast dispatch stop after first chunk error to avoid unnecessary extra chunk scheduling.
+    - covered by ingestion unit regression for chunk-stage error path stability.
 
 ## Better Suggestions (for faster and safer migration)
 
 1. Remove ambiguity in command ownership: replace `run_ts_cli` wrappers with explicit Rust command entrypoints where Rust is already the default path.
-2. Prioritize Phase 1 completion (`augment`, `eval-server`) before deepening parity elsewhere to eliminate last hard TS runtime dependency.
+2. Keep TS fallback flags only as rollback switches, and schedule their removal after Phase 6 parity gates pass.
 3. Treat `analyze` as the critical path: without analyze-time Kuzu/FTS/embeddings parity, advanced Rust tools will keep diverging from TS quality.
 4. Add a parity dashboard in repo (phase -> command -> capability -> test status) and enforce updates in PR checklist.

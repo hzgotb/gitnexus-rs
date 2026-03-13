@@ -343,6 +343,10 @@ fn tools_call_result(params: &Value) -> Result<Value> {
     Ok(response)
 }
 
+pub fn call_tool_json(name: &str, args: &Value) -> Result<Value> {
+    call_tool(name, args)
+}
+
 fn call_tool(name: &str, args: &Value) -> Result<Value> {
     match name {
         "list_repos" => {

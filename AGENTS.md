@@ -100,6 +100,9 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 - **MUST update both README files after every completed migration.** Any migration task is only considered complete after syncing migration-related docs in:
   - `MIGRATION_PROGRESS.md`
 - Migration doc sync should include at least: what changed, required commands/config, and any compatibility or breaking-change notes.
+- **For any network-dependent `cargo` command, MUST automatically request escalated execution and include a persistent prefix rule.** Use `sandbox_permissions: "require_escalated"` and attach a matching `prefix_rule` (for example `["cargo","search"]`, `["cargo","info"]`, `["cargo","add"]`, `["cargo","update"]`) so approvals can persist across sessions and machines.
+- **At the start of every new session, MUST verify both GitNexus MCP and crates registry availability.** Run one GitNexus MCP check (for example `list_repos`) and one crates registry check with default Cargo config.
+- **When testing crates registry availability, MUST NOT specify a registry override.** Do not use `--registry` or `--index`; use a plain command such as `cargo search serde --limit 1`.
 
 ## Skills
 A skill is a set of local instructions stored in a `SKILL.md` file. The list below reflects currently installed skills under `.agents/skills`.
