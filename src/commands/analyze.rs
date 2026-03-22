@@ -5,9 +5,12 @@ use chrono::Utc;
 
 use crate::git::{get_current_commit, get_git_root, is_git_repo};
 use crate::ingestion::{run_ingestion_pipeline, save_ingestion_report};
+use crate::storage::kuzu_store::rebuild_from_ingestion;
 use crate::storage::repo_manager::{
     RepoMeta, RepoStats, add_to_gitignore, get_storage_paths, load_meta, register_repo, save_meta,
 };
+
+const GRAPH_CACHE_FILENAME: &str = "graph.json";
 
 #[derive(Debug, Clone, Copy)]
 pub struct AnalyzeOptions {
@@ -33,15 +36,17 @@ pub fn run(input_path: Option<&Path>, options: AnalyzeOptions) -> Result<()> {
     let storage = get_storage_paths(&repo_path);
     let current_commit = get_current_commit(&repo_path);
     let existing_meta = load_meta(&storage.storage_path)?;
+    let has_query_ready_artifacts = storage.kuzu_path.exists();
 
     if let Some(existing) = existing_meta {
-        if !options.force && existing.last_commit == current_commit {
+        if !options.force && existing.last_commit == current_commit && has_query_ready_artifacts {
             println!("  Already up to date\n");
             return Ok(());
         }
     }
 
     let ingestion = run_ingestion_pipeline(&repo_path)?;
+    let kuzu_report = rebuild_from_ingestion(&repo_path, &storage, &ingestion)?;
     let indexed_at = Utc::now().to_rfc3339();
 
     let meta = RepoMeta {
@@ -58,6 +63,7 @@ pub fn run(input_path: Option<&Path>, options: AnalyzeOptions) -> Result<()> {
         }),
     };
 
+    save_graph_cache(&storage.storage_path, &ingestion)?;
     save_meta(&storage.storage_path, &meta)?;
     save_ingestion_report(&storage.storage_path, &ingestion)?;
     register_repo(&repo_path, &meta)?;
@@ -67,7 +73,7 @@ pub fn run(input_path: Option<&Path>, options: AnalyzeOptions) -> Result<()> {
         println!("  Note: --embeddings is not implemented in Rust preview yet.");
     }
 
-    println!("  Repository indexed successfully (structure + parsing ingestion)");
+    println!("  Repository indexed successfully (ingestion + kuzu materialization)");
     println!("  Path: {}", repo_path.to_string_lossy());
     println!("  Indexed at: {indexed_at}");
     println!(
@@ -92,8 +98,39 @@ pub fn run(input_path: Option<&Path>, options: AnalyzeOptions) -> Result<()> {
             println!("    - {language}: {count}");
         }
     }
+    println!(
+        "  Kuzu: {} nodes, {} edges -> {}",
+        kuzu_report.indexed_nodes,
+        kuzu_report.indexed_edges,
+        storage.kuzu_path.to_string_lossy()
+    );
+    println!("  FTS indexes: {}", kuzu_report.fts_indexes);
+    if !kuzu_report.fts_warnings.is_empty() {
+        println!("  FTS warnings:");
+        for warning in &kuzu_report.fts_warnings {
+            println!("    - {warning}");
+        }
+    }
     println!();
 
+    Ok(())
+}
+
+fn save_graph_cache(
+    storage_path: &Path,
+    ingestion: &crate::ingestion::IngestionResult,
+) -> Result<()> {
+    std::fs::create_dir_all(storage_path).with_context(|| {
+        format!(
+            "failed to create storage directory {}",
+            storage_path.to_string_lossy()
+        )
+    })?;
+
+    let graph_path = storage_path.join(GRAPH_CACHE_FILENAME);
+    let content = serde_json::to_string_pretty(ingestion)?;
+    std::fs::write(&graph_path, content)
+        .with_context(|| format!("failed to write {}", graph_path.to_string_lossy()))?;
     Ok(())
 }
 

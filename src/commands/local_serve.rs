@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 
 use crate::commands::local_mcp::GitNexusMcpServer;
 use crate::ingestion::{HeuristicProcess, IngestionResult, StructureNode, run_ingestion_pipeline};
+use crate::storage::kuzu_store::try_search_fts;
 use crate::storage::repo_manager::{
     RegistryEntry, get_storage_paths, list_registered_repos, load_meta,
 };
@@ -399,6 +400,17 @@ fn handle_search(request: &HttpRequest) -> Result<HttpResponse> {
         .and_then(Value::as_u64)
         .map(|n| n.clamp(1, 100))
         .unwrap_or(10);
+
+    let repo_entry = resolve_repo_entry(repo_hint.as_deref())?;
+    match try_search_fts(Path::new(&repo_entry.path), query, limit as usize) {
+        Ok(Some(results)) => return Ok(json_response(json!({ "results": results }))),
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!(
+                "GitNexus: native Kuzu FTS search failed, falling back to query baseline: {err}"
+            );
+        }
+    }
 
     let mut args = vec![query.to_string(), "--limit".to_string(), limit.to_string()];
     if let Some(repo) = repo_hint {

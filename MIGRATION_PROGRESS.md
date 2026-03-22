@@ -2,19 +2,37 @@
 
 中文版请见 [MIGRATION_PROGRESS.zh-CN.md](./MIGRATION_PROGRESS.zh-CN.md)。
 
-Last updated: `2026-03-12`
+Last updated: `2026-03-14`
+
+## Execution Summary (2026-03-14)
+
+- Overall migration progress relative to the TypeScript baseline is **about 45% to 55%**, now closer to **~50%** than the earlier “well below half” snapshot.
+- Phase status:
+  - **Phase 1**: completed.
+  - **Phase 2**: well underway, but not parity-complete.
+  - **Phase 3**: baseline implemented in Rust `analyze`, but parity is still incomplete.
+  - **Phase 4**: started at a lexical baseline, but semantic/hybrid parity is still missing.
+  - **Phase 5**: native baseline exists, but parity remains incomplete.
+  - **Phase 6**: not complete.
 
 ## Scope and Baseline
 
-This document is a TS-baseline audit:
+This document is a TS-baseline audit of the core Rust CLI surface and parity-critical runtime capabilities:
 
 - Baseline (target): `GitNexus/gitnexus/src` (TypeScript implementation)
 - Current Rust implementation: `src`
-- Evidence source: GitNexus MCP (`query/context/cypher`) + direct code inspection
+- Audit scope: Rust CLI entrypoints under `src` and parity-critical runtime behavior, not every TS helper entrypoint
+- Evidence source: GitNexus MCP (`query/context/cypher`) + direct code inspection in `src` and `GitNexus/gitnexus/src`
 
-### MCP Evidence Snapshot (2026-03-12)
+### Audit Notes (2026-03-14)
 
-- TS ingestion module size: `20` files (`GitNexus/gitnexus/src/core/ingestion/**`)
+- `gitnexus-rs` MCP index is current for this audit.
+- Upstream `GitNexus` MCP index is `2` commits behind HEAD, so TS baseline claims below are based on MCP + filesystem inspection rather than MCP alone.
+- TS helper entrypoints `ai-context`, `lazy-action`, and `tool` are outside the currently tracked migration surface because they do not have corresponding Rust command entrypoints under `src/commands`.
+
+### Evidence Snapshot (2026-03-14)
+
+- TS ingestion module size: `18` files (`GitNexus/gitnexus/src/core/ingestion/**`)
 - Rust ingestion module size: `7` files (`src/ingestion/{mod,scan,symbols,relations,summaries,graph,parser_loader}.rs`)
 - TS embeddings module size: `5` files (`.../core/embeddings/**`)
 - TS search module size: `2` files (`.../core/search/**`)
@@ -22,19 +40,25 @@ This document is a TS-baseline audit:
 - TS MCP module size: `8` files (`.../src/mcp/**`)
 - TS server module size: `2` files (`.../src/server/**`)
 
-## Current Rust-Only Status (TS as the reference line)
+## Current Rust Runtime Status (TS as the reference line)
 
 ### Command-level status
 
-- Rust-only (or Rust-first command path):  
-  `setup`, `analyze`, `list`, `status`, `clean`, `wiki`, `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve`
-- Not Rust-only (still TS delegated):  
-  `augment`, `eval-server`
+- Rust-native by default:  
+  `setup`, `analyze`, `list`, `status`, `clean`, `wiki`, `augment`, `eval-server`
+- Rust-first via delegate wrapper:  
+  `query`, `context`, `impact`, `cypher`, `detect-changes`, `rename`, `mcp`, `serve`
+- Outside the currently tracked migration surface:  
+  `ai-context`, `lazy-action`, `tool`
 
 Note:
 
 - `query/context/impact/cypher/detect-changes/rename/mcp/serve` currently route through `run_ts_cli(...)` wrappers, but are intercepted by Rust native dispatch (`local_tools::try_run_native_tool`) first.
+- `augment` and `eval-server` now default to Rust-native paths, with TS fallback preserved as explicit opt-in via:
+  - `GITNEXUS_USE_TS_AUGMENT=1`
+  - `GITNEXUS_USE_TS_EVAL_SERVER=1`
 - For query-like tools, Rust path is Kuzu-bridge first (`local_kuzu`) with heuristic fallback, not full TS parity.
+- Rust `/api/search` now adds a native Kuzu FTS path before falling back to the local `query` baseline.
 
 ### Capability-level status (more important than command names)
 
@@ -45,11 +69,15 @@ Note:
   - embeddings pipeline (`runEmbeddingPipeline`, cache reuse path)
 - Rust `analyze::run` currently does:
   - `run_ingestion_pipeline`
-  - save meta/report/register
-  - prints `--embeddings` not implemented
+  - `rebuild_from_ingestion` (Kuzu materialization + FTS build)
+  - save `.gitnexus/graph.json` fallback cache + meta/report/register
+  - prints that `--embeddings` is not implemented
 - TS `wikiCommand` + `WikiGenerator` includes:
   - LLM config resolution, interactive setup, richer generation workflow, optional gist publish
 - Rust `wiki::run` is a baseline static generator and explicitly marks `model/base-url/api-key/concurrency/gist` as not implemented
+- TS `/api/search` uses FTS plus optional semantic/hybrid retrieval.
+- Rust `/api/search` now tries native Kuzu FTS first and falls back to the local `query` baseline, but still does not reach TS hybrid/semantic parity.
+- Rust MCP/HTTP serving exists natively, but resources/prompts/setup/staleness guidance remain simplified compared to TS.
 
 ## Phase Plan (TS baseline, list only NOT Rust-only content)
 
@@ -129,18 +157,20 @@ Steps:
 
 Goal: Make Rust `analyze` produce TS-grade query-ready graph artifacts.
 
+Status: Baseline implemented, parity incomplete (`2026-03-14`).
+
 Remaining NOT Rust-only items:
 
-1. Analyze-time Kuzu materialization parity is missing.
-2. Analyze-time FTS build parity is missing.
-3. Robust incremental reload/update behavior parity is missing.
+1. Robust incremental reload/update behavior parity is missing.
+2. Kuzu schema/loader fidelity and wider metadata coverage are still incomplete.
+3. Analyze-time embeddings handoff is still missing (`--embeddings` is not implemented in Rust preview).
 
 Steps:
 
-1. Move Kuzu load path from query-time fallback model into analyze pipeline.
-2. Align Kuzu schema and loader behavior to TS baseline.
-3. Implement FTS index build/update in Rust analyze stage.
-4. Add integrity checks and safe rebuild strategy for lock/wal/reset paths.
+1. Baseline completed (`2026-03-14`): Rust `analyze` now materializes Kuzu from ingestion, writes `.gitnexus/kuzu`, and persists `.gitnexus/graph.json` for fallback runtimes.
+2. Baseline completed (`2026-03-14`): Rust `analyze` now attempts FTS extension load/install and builds per-table FTS indexes.
+3. Remaining: align Kuzu schema and loader behavior more tightly to the TS baseline.
+4. Remaining: add integrity checks and incremental reload/update semantics beyond the current safe full-rebuild path.
 
 ### Phase 4: Search + Embeddings
 
@@ -150,14 +180,15 @@ Remaining NOT Rust-only items:
 
 1. Embedding generation pipeline (including cache reuse) is missing in Rust.
 2. Hybrid retrieval parity (lexical + semantic fusion) is incomplete.
-3. `/api/search` behavior parity is incomplete.
+3. `/api/search` behavior parity is incomplete; Rust currently has a lexical FTS baseline plus local `query` fallback, not TS hybrid ranking.
 
 Steps:
 
-1. Implement embedding pipeline and storage format parity.
-2. Add hybrid ranking strategy with reproducible scoring.
-3. Align API output schema and ranking semantics with TS.
-4. Add recall/precision regression tests for representative queries.
+1. Baseline completed (`2026-03-14`): Rust `/api/search` now attempts native Kuzu FTS before falling back to the local `query` baseline.
+2. Implement embedding pipeline and storage format parity.
+3. Add hybrid ranking strategy with reproducible scoring.
+4. Align API output schema and ranking semantics with TS.
+5. Add recall/precision regression tests for representative queries.
 
 ### Phase 5: MCP + HTTP Serving
 
@@ -228,6 +259,11 @@ Steps:
     - bounded worker-result channel in chunk execution to reduce peak queued memory under heavy extraction output.
     - fail-fast dispatch stop after first chunk error to avoid unnecessary extra chunk scheduling.
     - covered by ingestion unit regression for chunk-stage error path stability.
+12. Phase 3 graph persistence baseline is now in the Rust analyze path:
+    - `analyze` rebuilds `.gitnexus/kuzu` from ingestion and persists `.gitnexus/graph.json`.
+    - `analyze` emits Kuzu/FTS summary output and only reports "Already up to date" when query-ready artifacts already exist for the current commit.
+13. Rust server search now has a native lexical baseline:
+    - `/api/search` tries Kuzu FTS first and falls back to the local `query` baseline when Kuzu/FTS is unavailable.
 
 ## Better Suggestions (for faster and safer migration)
 

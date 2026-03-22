@@ -1,6 +1,24 @@
 packages:
-    - ./GitNexus/gitnexus
-    - ./GitNexus/gitnexus-web
+  - ./GitNexus/gitnexus
+  - ./GitNexus/gitnexus-web
 allowBuilds:
-    kuzu: true
-    tree-sitter-kotlin: true
+  '@swc/core': true
+  esbuild: true
+  kuzu: true
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: true
+  tree-sitter: true
+  tree-sitter-c: true
+  tree-sitter-c-sharp: true
+  tree-sitter-cli: true
+  tree-sitter-cpp: true
+  tree-sitter-go: true
+  tree-sitter-java: true
+  tree-sitter-javascript: true
+  tree-sitter-kotlin: true
+  tree-sitter-php: true
+  tree-sitter-python: true
+  tree-sitter-rust: true
+  tree-sitter-swift: true
+  tree-sitter-typescript: true

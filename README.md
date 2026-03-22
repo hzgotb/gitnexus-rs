@@ -151,6 +151,27 @@ Detailed migration progress (including command matrix and parity gaps) has been 
 - [MIGRATION_PROGRESS.md](./MIGRATION_PROGRESS.md)
 - [MIGRATION_PROGRESS.zh-CN.md](./MIGRATION_PROGRESS.zh-CN.md)
 
+## Containerized test validation (no host cmake)
+
+If you only need validation and do not want to install `cmake` or other native build tools on your host, run tests in a container:
+
+1. Build the test image once:
+   `docker build -f Dockerfile.test -t gitnexus-rs-test .`
+2. Run default validation (`cargo test`) in container:
+   `./scripts/test-in-container.sh`
+3. Run a specific cargo subcommand:
+   `./scripts/test-in-container.sh test -- --nocapture`
+
+Notes:
+
+- The script auto-builds image `gitnexus-rs-test` if missing.
+- Build output stays in container path `CARGO_TARGET_DIR=/tmp/gitnexus-target` by default, so host `target/` is not polluted.
+- Override behavior with env vars:
+  - `CONTAINER_ENGINE` (`docker`/`podman`)
+  - `GITNEXUS_TEST_IMAGE`
+  - `GITNEXUS_TEST_PLATFORM` (for example `linux/arm64`)
+  - `GITNEXUS_TEST_REBUILD=1` (force rebuild image)
+
 ## Why this shape
 
 The TypeScript implementation includes a large multi-phase pipeline (Tree-sitter parsing, graph relationship extraction, Kuzu materialization, embedding generation, MCP/HTTP serving). A full equivalent Rust rewrite should be done in safe stages to keep behavior parity and avoid regressions.

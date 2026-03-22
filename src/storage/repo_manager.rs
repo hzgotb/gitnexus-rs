@@ -29,6 +29,7 @@ pub struct RepoMeta {
 #[derive(Debug, Clone)]
 pub struct StoragePaths {
     pub storage_path: PathBuf,
+    pub kuzu_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +57,11 @@ pub fn get_storage_path(repo_path: &Path) -> PathBuf {
 
 pub fn get_storage_paths(repo_path: &Path) -> StoragePaths {
     let storage_path = get_storage_path(repo_path);
-    StoragePaths { storage_path }
+    let kuzu_path = storage_path.join("kuzu");
+    StoragePaths {
+        storage_path,
+        kuzu_path,
+    }
 }
 
 pub fn load_meta(storage_path: &Path) -> Result<Option<RepoMeta>> {

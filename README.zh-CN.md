@@ -151,6 +151,27 @@
 - [MIGRATION_PROGRESS.zh-CN.md](./MIGRATION_PROGRESS.zh-CN.md)
 - [MIGRATION_PROGRESS.md](./MIGRATION_PROGRESS.md)
 
+## 容器化测试验证（不污染主机环境）
+
+如果你只需要做验证，不希望在主机安装 `cmake` 等原生构建依赖，可以在容器里运行测试：
+
+1. 首次构建测试镜像：
+   `docker build -f Dockerfile.test -t gitnexus-rs-test .`
+2. 在容器中执行默认验证（`cargo test`）：
+   `./scripts/test-in-container.sh`
+3. 执行指定 cargo 子命令：
+   `./scripts/test-in-container.sh test -- --nocapture`
+
+说明：
+
+- 脚本会在本地不存在时自动构建 `gitnexus-rs-test` 镜像。
+- 默认使用 `CARGO_TARGET_DIR=/tmp/gitnexus-target`，避免污染主机 `target/`。
+- 可通过环境变量覆盖：
+  - `CONTAINER_ENGINE`（`docker`/`podman`）
+  - `GITNEXUS_TEST_IMAGE`
+  - `GITNEXUS_TEST_PLATFORM`（例如 `linux/arm64`）
+  - `GITNEXUS_TEST_REBUILD=1`（强制重建镜像）
+
 ## 为什么是这种形态
 
 TypeScript 版本包含大型多阶段流水线（Tree-sitter 解析、图关系提取、Kuzu 物化、向量生成、MCP/HTTP 服务）。完整等价的 Rust 重写应分阶段安全推进，以维持行为对齐并避免回归。
