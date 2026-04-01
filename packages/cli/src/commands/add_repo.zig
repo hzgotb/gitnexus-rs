@@ -28,6 +28,91 @@ const ExistingContainer = struct {
     name: []const u8,
 };
 
+const ParsedAddRepoArgs = struct {
+    src_raw: ?[]const u8 = null,
+    dest_name_arg: ?[]const u8 = null,
+    restart_after: bool = false,
+    analyze_after: bool = false,
+    container_selector: ?[]const u8 = null,
+    repos_override: ?[]const u8 = null,
+    registry_override: ?[]const u8 = null,
+    from_source_remote: ?[]const u8 = null,
+    help_requested: bool = false,
+};
+
+fn parseAddRepoArgs(args: []const []const u8) !ParsedAddRepoArgs {
+    var parsed = ParsedAddRepoArgs{};
+    var i: usize = 1;
+
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            parsed.help_requested = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--restart") or std.mem.eql(u8, arg, "--rebuild")) {
+            parsed.restart_after = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--analyze")) {
+            parsed.analyze_after = true;
+            parsed.restart_after = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--container")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            const selector = std.mem.trim(u8, args[i], " \t\r\n");
+            if (selector.len == 0) return error.InvalidArguments;
+            parsed.container_selector = selector;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--repos")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            const repos_path = std.mem.trim(u8, args[i], " \t\r\n");
+            if (repos_path.len == 0) return error.InvalidArguments;
+            parsed.repos_override = repos_path;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--registry")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            const registry_path = std.mem.trim(u8, args[i], " \t\r\n");
+            if (registry_path.len == 0) return error.InvalidArguments;
+            parsed.registry_override = registry_path;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--from-source")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            const remote = std.mem.trim(u8, args[i], " \t\r\n");
+            if (remote.len == 0) return error.InvalidArguments;
+            parsed.from_source_remote = remote;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--from-source=")) {
+            const remote = std.mem.trim(u8, arg["--from-source=".len..], " \t\r\n");
+            if (remote.len == 0) return error.InvalidArguments;
+            parsed.from_source_remote = remote;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-")) return error.InvalidArguments;
+
+        if (parsed.src_raw == null) {
+            parsed.src_raw = arg;
+            continue;
+        }
+        if (parsed.dest_name_arg == null) {
+            parsed.dest_name_arg = arg;
+            continue;
+        }
+        return error.InvalidArguments;
+    }
+
+    return parsed;
+}
+
 fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
     const lang = i18n.detectLangFromEnv(allocator);
     const tpl = switch (lang) {
@@ -553,4 +638,38 @@ pub fn main() void {
         std.process.exit(1);
     };
     std.process.exit(exit_code);
+}
+
+test "add_repo parse supports inline from-source syntax" {
+    const testing = std.testing;
+    const parsed = try parseAddRepoArgs(&.{
+        "gitn add-repo",
+        "~/xx/abrowser",
+        "--from-source=https://github.com/xx/agent-browser",
+    });
+
+    try testing.expectEqualStrings("~/xx/abrowser", parsed.src_raw.?);
+    try testing.expect(parsed.dest_name_arg == null);
+    try testing.expectEqualStrings(
+        "https://github.com/xx/agent-browser",
+        parsed.from_source_remote.?,
+    );
+}
+
+test "add_repo parse keeps dest-name as second positional after from-source" {
+    const testing = std.testing;
+    const parsed = try parseAddRepoArgs(&.{
+        "gitn add-repo",
+        "~/xx/abrowser",
+        "--from-source",
+        "https://github.com/xx/agent-browser",
+        "abrowser",
+    });
+
+    try testing.expectEqualStrings("~/xx/abrowser", parsed.src_raw.?);
+    try testing.expectEqualStrings("abrowser", parsed.dest_name_arg.?);
+    try testing.expectEqualStrings(
+        "https://github.com/xx/agent-browser",
+        parsed.from_source_remote.?,
+    );
 }

@@ -188,3 +188,7 @@ pub fn main() void {
     };
     std.process.exit(exit_code);
 }
+
+test {
+    _ = add_repo_cmd;
+}
