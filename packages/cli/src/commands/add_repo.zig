@@ -40,6 +40,8 @@ const ParsedAddRepoArgs = struct {
     help_requested: bool = false,
 };
 
+const CloneRunner = *const fn (allocator: Allocator, remote: []const u8, target_abs: []const u8) anyerror!void;
+
 fn parseAddRepoArgs(args: []const []const u8) !ParsedAddRepoArgs {
     var parsed = ParsedAddRepoArgs{};
     var i: usize = 1;
@@ -111,6 +113,61 @@ fn parseAddRepoArgs(args: []const []const u8) !ParsedAddRepoArgs {
     }
 
     return parsed;
+}
+
+fn defaultCloneRunner(allocator: Allocator, remote: []const u8, target_abs: []const u8) !void {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "git", "clone", remote, target_abs },
+    }) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print("Error: git executable not found on PATH\n", .{});
+            return error.GitCloneFailed;
+        },
+        else => return err,
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (!isExitedZero(result.term)) {
+        const stderr_text = std.mem.trim(u8, result.stderr, " \t\r\n");
+        if (stderr_text.len != 0) {
+            std.debug.print("Error: git clone failed: {s}\n", .{stderr_text});
+        } else {
+            std.debug.print("Error: git clone failed for {s}\n", .{remote});
+        }
+        return error.GitCloneFailed;
+    }
+}
+
+var clone_runner: CloneRunner = defaultCloneRunner;
+
+fn ensureRemoteSourceReady(
+    allocator: Allocator,
+    cwd_abs: []const u8,
+    home_dir: []const u8,
+    src_raw: []const u8,
+    remote: []const u8,
+) ![]const u8 {
+    const target_abs = try normalizeSourcePath(allocator, src_raw, home_dir, cwd_abs);
+    errdefer allocator.free(target_abs);
+
+    if (std.fs.openDirAbsolute(target_abs, .{})) |opened_dir| {
+        var dir = opened_dir;
+        dir.close();
+        std.debug.print("Error: clone target already exists: {s}\n", .{target_abs});
+        return error.TargetAlreadyExists;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        error.NotDir => {
+            std.debug.print("Error: clone target already exists: {s}\n", .{target_abs});
+            return error.TargetAlreadyExists;
+        },
+        else => return err,
+    }
+
+    try clone_runner(allocator, remote, target_abs);
+    return target_abs;
 }
 
 fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
@@ -672,4 +729,67 @@ test "add_repo parse keeps dest-name as second positional after from-source" {
         "https://github.com/xx/agent-browser",
         parsed.from_source_remote.?,
     );
+}
+
+var test_clone_call_count: usize = 0;
+var test_clone_remote: ?[]const u8 = null;
+
+fn fakeCloneCreatesDir(_: Allocator, remote: []const u8, target_abs: []const u8) !void {
+    test_clone_call_count += 1;
+    test_clone_remote = remote;
+    try std.fs.makeDirAbsolute(target_abs);
+}
+
+fn fakeCloneFails(_: Allocator, _: []const u8, _: []const u8) !void {
+    return error.GitCloneFailed;
+}
+
+test "add_repo ensureRemoteSourceReady rejects existing target directory" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root_abs = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root_abs);
+
+    const target_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "abrowser" });
+    defer testing.allocator.free(target_abs);
+    try std.fs.makeDirAbsolute(target_abs);
+
+    try testing.expectError(
+        error.TargetAlreadyExists,
+        ensureRemoteSourceReady(testing.allocator, root_abs, "", target_abs, "https://example.com/repo.git"),
+    );
+}
+
+test "add_repo ensureRemoteSourceReady clones into missing target directory" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root_abs = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root_abs);
+
+    const target_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "abrowser" });
+    defer testing.allocator.free(target_abs);
+
+    const original_runner = clone_runner;
+    clone_runner = fakeCloneCreatesDir;
+    defer clone_runner = original_runner;
+
+    test_clone_call_count = 0;
+    test_clone_remote = null;
+
+    const prepared = try ensureRemoteSourceReady(
+        testing.allocator,
+        root_abs,
+        "",
+        target_abs,
+        "https://example.com/repo.git",
+    );
+    defer testing.allocator.free(prepared);
+
+    try testing.expectEqual(@as(usize, 1), test_clone_call_count);
+    try testing.expectEqualStrings("https://example.com/repo.git", test_clone_remote.?);
+    try testing.expectEqualStrings(target_abs, prepared);
 }
