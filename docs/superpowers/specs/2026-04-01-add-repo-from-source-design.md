@@ -6,6 +6,8 @@
 
 Extend `gitn add-repo` with `--from-source=<remote_repo>` so the command can clone a remote repository into a local target directory and then add that directory to `repos.json` using the existing mapping workflow.
 
+This iteration focuses on the command behavior only. Multi-language help text completeness is explicitly out of scope for now.
+
 ## Context
 
 Current `add-repo` behavior only accepts an existing local source directory:
@@ -143,13 +145,11 @@ This keeps the new capability narrow and avoids duplicating the main add-repo wo
 
 ## User-Facing Text Changes
 
-Update the command documentation and shell completion metadata to describe the new option:
+Do not expand multi-language support as part of this change.
 
-- `packages/cli/src/i18n/add_repo_help.zh.txt`
-- `packages/cli/src/i18n/add_repo_help.en.txt`
-- `packages/cli/src/i18n/main_help.zh.txt`
-- `packages/cli/src/i18n/main_help.en.txt`
-- `packages/cli/src/completions/gitn.zsh`
+- The implementation may keep existing help/i18n coverage as-is for now.
+- If a minimal help update is needed to avoid a completely hidden option, keep it narrow and do not treat full zh/en parity as a release requirement for this task.
+- Shell completion updates are optional in this iteration and should not force multi-language text work.
 
 ## Testing Scope
 
@@ -172,6 +172,7 @@ Testing should focus on deterministic parsing and flow control, not real network
 
 ## Non-Goals
 
+- Full multi-language help and copy parity
 - No automatic cleanup of clone targets on later validation failure
 - No reuse of existing directories
 - No implicit `fetch`, `pull`, or update behavior
