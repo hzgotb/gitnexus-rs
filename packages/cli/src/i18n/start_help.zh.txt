@@ -1,0 +1,10 @@
+用法:
+  {{exe}} [--tag <tag>] [--port <port>] [--registry <path>] [--repos <path>] [--rebuild <name-or-id>]
+
+选项:
+  -h, --help      显示帮助信息
+  -t, --tag       指定镜像 tag（默认: latest）
+  -p, --port      直接指定宿主机端口（1-65535），跳过端口交互
+  -r, --registry  指定 registry.json 路径（绝对或相对）
+  --repos         指定 repos.json 路径（绝对或相对）
+  --rebuild       直接重建指定旧容器，跳过模式选择

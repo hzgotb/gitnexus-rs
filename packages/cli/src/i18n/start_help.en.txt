@@ -1,0 +1,10 @@
+Usage:
+  {{exe}} [--tag <tag>] [--port <port>] [--registry <path>] [--repos <path>] [--rebuild <name-or-id>]
+
+Options:
+  -h, --help      Show this help message
+  -t, --tag       Override image tag (default: latest)
+  -p, --port      Bind host port directly (1-65535), skip port prompt
+  -r, --registry  Override registry.json path (absolute or relative)
+  --repos         Override repos.json path (absolute or relative)
+  --rebuild       Rebuild the specified existing container directly

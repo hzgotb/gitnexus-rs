@@ -1,2 +1,5 @@
 [tools]
 zig = "latest"
+
+[env]
+_.path = ["./zig-out/bin"]

@@ -1,0 +1,19 @@
+Usage:
+  {{exe}} [--container <name-or-id>] [--registry <path>] [--repo <repo_name> | --all] [--jobs <n>] [--] [analyze_args...]
+
+Options:
+  -h, --help       Show this help message
+  -c, --container  Specify target running container
+  --registry       Override registry.json path; otherwise prefer the container-labeled json group
+  -r, --repo       Specify target repo under /repos in container
+  -a, --all        Run analyze for all repos under /repos
+  -j, --jobs       Parallel jobs for --all (default: 1)
+
+Examples:
+  {{exe}}                         # interactive choose container/repo
+  {{exe}} --registry ./registry-a.json
+  {{exe}} --all                   # run analyze for every repo
+  {{exe}} --all -j 4              # run analyze concurrently in 4 repos
+  {{exe}} -c gitnexus-abcd1234    # choose repo in container
+  {{exe}} -c gitnexus-abcd1234 -r vue -- --format json
+  {{exe}} -c gitnexus-abcd1234 --all -- --format json

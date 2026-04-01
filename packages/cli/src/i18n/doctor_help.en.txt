@@ -1,0 +1,8 @@
+Usage:
+  {{exe}} [--registry <path>] [--repos <path>] [--fix]
+
+Options:
+  -h, --help     Show this help message
+  -r, --registry Override registry.json path (absolute or relative)
+  --repos        Override repos.json path (absolute or relative)
+  --fix          Create missing registry.json / repos.json with default content

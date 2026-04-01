@@ -1,0 +1,556 @@
+const std = @import("std");
+const analyze_cmd = @import("analyze.zig");
+const container_group = @import("../container_group.zig");
+const container_runtime = @import("../container_runtime.zig");
+const i18n = @import("../i18n.zig");
+const start_cmd = @import("start.zig");
+
+const Allocator = std.mem.Allocator;
+const JsonValue = std.json.Value;
+const help_en = @embedFile("../i18n/add_repo_help.en.txt");
+const help_zh = @embedFile("../i18n/add_repo_help.zh.txt");
+const container_name_prefix = "gitnexus";
+
+const Status = enum {
+    append,
+    same_src_ok,
+    conflict_src,
+    conflict_dest,
+};
+
+const RepoEntry = struct {
+    src: []const u8 = "",
+    dest: []const u8 = "",
+};
+
+const ExistingContainer = struct {
+    id: []const u8,
+    name: []const u8,
+};
+
+fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
+    const lang = i18n.detectLangFromEnv(allocator);
+    const tpl = switch (lang) {
+        .zh => help_zh,
+        .en => help_en,
+    };
+    try i18n.printHelpTemplate(allocator, tpl, exe_name);
+}
+
+fn isManagedContainerName(name: []const u8) bool {
+    return std.mem.eql(u8, name, container_name_prefix) or std.mem.startsWith(u8, name, container_name_prefix ++ "-");
+}
+
+fn isExitedZero(term: std.process.Child.Term) bool {
+    return switch (term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
+}
+
+fn runDocker(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
+    return container_runtime.runDocker(allocator, argv);
+}
+
+fn resolveContainerSelectorToName(allocator: Allocator, selector: []const u8) ![]const u8 {
+    const result = try runDocker(allocator, &.{
+        "docker",
+        "ps",
+        "-a",
+        "--format",
+        "{{.ID}}\t{{.Names}}",
+    });
+    if (!isExitedZero(result.term)) {
+        std.debug.print("Error: failed to list docker containers.\n", .{});
+        return error.DockerPsFailed;
+    }
+
+    var containers = std.ArrayList(ExistingContainer).empty;
+    var lines = std.mem.splitScalar(u8, result.stdout, '\n');
+    while (lines.next()) |line_raw| {
+        const line = std.mem.trim(u8, line_raw, " \t\r\n");
+        if (line.len == 0) continue;
+
+        var cols = std.mem.splitScalar(u8, line, '\t');
+        const id = cols.next() orelse continue;
+        const name = cols.next() orelse continue;
+        if (!isManagedContainerName(name)) continue;
+
+        try containers.append(allocator, .{
+            .id = try allocator.dupe(u8, id),
+            .name = try allocator.dupe(u8, name),
+        });
+    }
+
+    var exact_name: ?[]const u8 = null;
+    for (containers.items) |container| {
+        if (std.mem.eql(u8, container.name, selector) or std.mem.eql(u8, container.id, selector)) {
+            if (exact_name != null) return error.AmbiguousSelector;
+            exact_name = container.name;
+        }
+    }
+    if (exact_name) |name| return name;
+
+    var prefix_name: ?[]const u8 = null;
+    for (containers.items) |container| {
+        if (std.mem.startsWith(u8, container.id, selector)) {
+            if (prefix_name != null) return error.AmbiguousSelector;
+            prefix_name = container.name;
+        }
+    }
+    return prefix_name orelse error.ContainerNotFound;
+}
+
+fn getEnvVarOwnedOrEmpty(allocator: Allocator, name: []const u8) ![]const u8 {
+    return std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => "",
+        else => return err,
+    };
+}
+
+fn detectHomeDir(allocator: Allocator) ![]const u8 {
+    const home = try getEnvVarOwnedOrEmpty(allocator, "HOME");
+    if (home.len != 0) return home;
+
+    const user_profile = try getEnvVarOwnedOrEmpty(allocator, "USERPROFILE");
+    if (user_profile.len != 0) return user_profile;
+
+    return "";
+}
+
+fn normalizeSourcePath(
+    allocator: Allocator,
+    raw_src: []const u8,
+    home_dir: []const u8,
+    cwd_abs: []const u8,
+) ![]const u8 {
+    const trimmed = std.mem.trim(u8, raw_src, " \t\r\n");
+    if (trimmed.len == 0) return "";
+
+    var candidate: []const u8 = trimmed;
+    if (home_dir.len != 0) {
+        if (std.mem.eql(u8, trimmed, "~")) {
+            candidate = home_dir;
+        } else if (std.mem.startsWith(u8, trimmed, "~/") or std.mem.startsWith(u8, trimmed, "~\\")) {
+            candidate = try std.fs.path.join(allocator, &.{ home_dir, trimmed[2..] });
+        }
+    }
+
+    if (std.fs.path.isAbsolute(candidate)) {
+        return try std.fs.path.resolve(allocator, &.{candidate});
+    }
+    return try std.fs.path.resolve(allocator, &.{ cwd_abs, candidate });
+}
+
+fn resolvePathFromCwd(allocator: Allocator, cwd_abs: []const u8, raw_path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(raw_path)) {
+        return try std.fs.path.resolve(allocator, &.{raw_path});
+    }
+    return try std.fs.path.resolve(allocator, &.{ cwd_abs, raw_path });
+}
+
+fn firstStringField(obj: *const std.json.ObjectMap, keys: []const []const u8) []const u8 {
+    for (keys) |key| {
+        if (obj.get(key)) |value| {
+            switch (value) {
+                .string => |s| return s,
+                else => {},
+            }
+        }
+    }
+    return "";
+}
+
+fn extractEntry(value: *const JsonValue) RepoEntry {
+    switch (value.*) {
+        .array => |arr| {
+            var src: []const u8 = "";
+            var dest: []const u8 = "";
+
+            if (arr.items.len >= 1) {
+                switch (arr.items[0]) {
+                    .string => |s| src = s,
+                    else => {},
+                }
+            }
+            if (arr.items.len >= 2) {
+                switch (arr.items[1]) {
+                    .string => |s| dest = s,
+                    else => {},
+                }
+            }
+
+            return .{ .src = src, .dest = dest };
+        },
+        .object => |obj| {
+            return .{
+                .src = firstStringField(&obj, &.{ "src_abs", "src", "source", "SRC_ABS" }),
+                .dest = firstStringField(&obj, &.{ "dest_name", "dest", "target", "DEST_NAME" }),
+            };
+        },
+        else => return .{},
+    }
+}
+
+fn makeRepoEntry(allocator: Allocator, src_abs: []const u8, dest_name: []const u8) !JsonValue {
+    var arr = std.json.Array.init(allocator);
+    try arr.append(.{ .string = try allocator.dupe(u8, src_abs) });
+    try arr.append(.{ .string = try allocator.dupe(u8, dest_name) });
+    return .{ .array = arr };
+}
+
+fn writeJsonAtomic(allocator: Allocator, root: JsonValue, repos_json_path: []const u8) !void {
+    const dir_path = std.fs.path.dirname(repos_json_path) orelse ".";
+    const file_name = std.fs.path.basename(repos_json_path);
+    const tmp_name = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{
+        file_name,
+        std.time.milliTimestamp(),
+    });
+
+    var dir = if (std.fs.path.isAbsolute(repos_json_path))
+        try std.fs.openDirAbsolute(dir_path, .{})
+    else
+        try std.fs.cwd().openDir(dir_path, .{});
+    defer dir.close();
+    errdefer dir.deleteFile(tmp_name) catch {};
+
+    var tmp_file = try dir.createFile(tmp_name, .{ .truncate = true });
+    defer tmp_file.close();
+
+    var writer_buffer: [4096]u8 = undefined;
+    var file_writer = tmp_file.writer(&writer_buffer);
+    try std.json.Stringify.value(root, .{ .whitespace = .indent_2 }, &file_writer.interface);
+    try file_writer.interface.writeAll("\n");
+    try file_writer.interface.flush();
+
+    dir.rename(tmp_name, file_name) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            try dir.deleteFile(file_name);
+            try dir.rename(tmp_name, file_name);
+        },
+        else => return err,
+    };
+}
+
+fn runStartFollowUp(
+    allocator: Allocator,
+    container_selector: ?[]const u8,
+    registry_path: ?[]const u8,
+    repos_path: ?[]const u8,
+) !u8 {
+    var forwarded = std.ArrayList([]const u8).empty;
+    try forwarded.append(allocator, "gitn start");
+    if (container_selector) |selector| {
+        try forwarded.appendSlice(allocator, &.{ "--rebuild", selector });
+    }
+    if (registry_path) |path| {
+        try forwarded.appendSlice(allocator, &.{ "--registry", path });
+    }
+    if (repos_path) |path| {
+        try forwarded.appendSlice(allocator, &.{ "--repos", path });
+    }
+    return start_cmd.runWithArgs(allocator, forwarded.items);
+}
+
+fn runAnalyzeFollowUp(
+    allocator: Allocator,
+    container_selector: ?[]const u8,
+    repo_name: []const u8,
+) !u8 {
+    var forwarded = std.ArrayList([]const u8).empty;
+    try forwarded.append(allocator, "gitn analyze");
+    if (container_selector) |selector| {
+        try forwarded.appendSlice(allocator, &.{ "--container", selector });
+    }
+    try forwarded.appendSlice(allocator, &.{ "--repo", repo_name });
+    return analyze_cmd.runWithArgs(allocator, forwarded.items);
+}
+
+pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
+    var src_raw: ?[]const u8 = null;
+    var dest_name_arg: ?[]const u8 = null;
+    var restart_after = false;
+    var analyze_after = false;
+    var container_selector: ?[]const u8 = null;
+    var repos_override: ?[]const u8 = null;
+    var registry_override: ?[]const u8 = null;
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            try printUsage(allocator, args[0]);
+            return 0;
+        }
+        if (std.mem.eql(u8, arg, "--restart") or std.mem.eql(u8, arg, "--rebuild")) {
+            restart_after = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--analyze")) {
+            analyze_after = true;
+            restart_after = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--container")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: missing value for {s}\n", .{arg});
+                try printUsage(allocator, args[0]);
+                return 1;
+            }
+            const selector = std.mem.trim(u8, args[i], " \t\r\n");
+            if (selector.len == 0) {
+                std.debug.print("Error: container selector must not be empty\n", .{});
+                return 1;
+            }
+            container_selector = selector;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--repos")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: missing value for {s}\n", .{arg});
+                try printUsage(allocator, args[0]);
+                return 1;
+            }
+            const path = std.mem.trim(u8, args[i], " \t\r\n");
+            if (path.len == 0) {
+                std.debug.print("Error: repos path must not be empty\n", .{});
+                return 1;
+            }
+            repos_override = path;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--registry")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: missing value for {s}\n", .{arg});
+                try printUsage(allocator, args[0]);
+                return 1;
+            }
+            const path = std.mem.trim(u8, args[i], " \t\r\n");
+            if (path.len == 0) {
+                std.debug.print("Error: registry path must not be empty\n", .{});
+                return 1;
+            }
+            registry_override = path;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-")) {
+            std.debug.print("Error: unknown argument: {s}\n", .{arg});
+            try printUsage(allocator, args[0]);
+            return 1;
+        }
+
+        if (src_raw == null) {
+            src_raw = arg;
+            continue;
+        }
+        if (dest_name_arg == null) {
+            dest_name_arg = arg;
+            continue;
+        }
+
+        std.debug.print("Error: too many positional arguments\n", .{});
+        try printUsage(allocator, args[0]);
+        return 1;
+    }
+
+    if (src_raw == null) {
+        try printUsage(allocator, args[0]);
+        return 1;
+    }
+
+    const src_raw_value = src_raw.?;
+    const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const target_container_name = if (container_selector) |selector|
+        resolveContainerSelectorToName(allocator, selector) catch |err| switch (err) {
+            error.DockerPsFailed => return 1,
+            error.ContainerNotFound => {
+                std.debug.print("Error: target container not found: {s}\n", .{selector});
+                return 1;
+            },
+            error.AmbiguousSelector => {
+                std.debug.print("Error: ambiguous container selector: {s}\n", .{selector});
+                return 1;
+            },
+            else => return err,
+        }
+    else
+        null;
+    const inferred_group_paths = if (target_container_name) |container_name|
+        container_group.inspectContainerJsonPaths(allocator, container_name) catch container_group.JsonGroupPaths{}
+    else
+        container_group.JsonGroupPaths{};
+
+    const src_abs = std.fs.cwd().realpathAlloc(allocator, src_raw_value) catch {
+        std.debug.print("Error: source directory does not exist: {s}\n", .{src_raw_value});
+        return 1;
+    };
+
+    var source_dir = std.fs.openDirAbsolute(src_abs, .{}) catch {
+        std.debug.print("Error: source path is not a directory: {s}\n", .{src_raw_value});
+        return 1;
+    };
+    source_dir.close();
+
+    const dest_name: []const u8 = if (dest_name_arg) |dest_arg|
+        dest_arg
+    else
+        std.fs.path.basename(src_abs);
+
+    const repos_json_path = if (repos_override) |path|
+        try resolvePathFromCwd(allocator, cwd_abs, path)
+    else if (inferred_group_paths.repos_json_path.len != 0)
+        inferred_group_paths.repos_json_path
+    else
+        try std.fs.path.join(allocator, &.{ cwd_abs, "repos.json" });
+    const file_content = std.fs.cwd().readFileAlloc(allocator, repos_json_path, 16 * 1024 * 1024) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+
+    var parsed: ?std.json.Parsed(JsonValue) = null;
+    defer {
+        if (parsed) |*p| p.deinit();
+    }
+
+    var root: JsonValue = undefined;
+    if (file_content) |content| {
+        defer allocator.free(content);
+
+        parsed = std.json.parseFromSlice(JsonValue, allocator, content, .{
+            .allocate = .alloc_always,
+        }) catch {
+            std.debug.print("Error: repos.json is not valid JSON\n", .{});
+            return 1;
+        };
+        root = parsed.?.value;
+    } else {
+        root = .{ .object = std.json.ObjectMap.init(allocator) };
+    }
+
+    var root_obj: *std.json.ObjectMap = undefined;
+    switch (root) {
+        .object => |*obj| root_obj = obj,
+        else => {
+            std.debug.print("Error: repos.json root must be a JSON object\n", .{});
+            return 1;
+        },
+    }
+
+    var repos = std.json.Array.init(allocator);
+    if (root_obj.get("repos")) |repos_value| {
+        switch (repos_value) {
+            .array => |arr| repos = arr,
+            else => {},
+        }
+    }
+
+    const home_dir = try detectHomeDir(allocator);
+    const new_src_norm = try normalizeSourcePath(allocator, src_abs, home_dir, cwd_abs);
+
+    var status: Status = .append;
+    var old_dest: []const u8 = "";
+    var old_src: []const u8 = "";
+    var same_src_index: ?usize = null;
+
+    for (repos.items, 0..) |*entry, idx| {
+        if (status != .append) break;
+
+        const old_entry = extractEntry(entry);
+        const old_src_norm = try normalizeSourcePath(allocator, old_entry.src, home_dir, cwd_abs);
+
+        if (old_src_norm.len != 0 and std.mem.eql(u8, old_src_norm, new_src_norm)) {
+            if (old_entry.dest.len == 0 or std.mem.eql(u8, old_entry.dest, dest_name)) {
+                status = .same_src_ok;
+                same_src_index = idx;
+                old_dest = old_entry.dest;
+            } else {
+                status = .conflict_src;
+                old_dest = old_entry.dest;
+            }
+            continue;
+        }
+
+        if (old_entry.dest.len != 0 and std.mem.eql(u8, old_entry.dest, dest_name) and !std.mem.eql(u8, old_src_norm, new_src_norm)) {
+            status = .conflict_dest;
+            old_src = old_entry.src;
+        }
+    }
+
+    switch (status) {
+        .conflict_src => {
+            std.debug.print(
+                "Error: source is already mapped to '{s}', cannot remap to '{s}'\n",
+                .{ old_dest, dest_name },
+            );
+            return 1;
+        },
+        .conflict_dest => {
+            std.debug.print(
+                "Error: destination name '{s}' is already used by another source ({s})\n",
+                .{ dest_name, old_src },
+            );
+            return 1;
+        },
+        else => {},
+    }
+
+    const new_entry = try makeRepoEntry(allocator, src_abs, dest_name);
+    if (same_src_index) |idx| {
+        repos.items[idx] = new_entry;
+    } else {
+        try repos.append(new_entry);
+    }
+
+    try root_obj.put("repos", .{ .array = repos });
+    try writeJsonAtomic(allocator, root, repos_json_path);
+
+    if (status == .same_src_ok) {
+        if (std.mem.eql(u8, old_dest, dest_name)) {
+            std.debug.print("Info: same mapping already exists, skipped duplicate append.\n", .{});
+        } else {
+            std.debug.print("Info: source already existed, destination name was filled/updated.\n", .{});
+        }
+    } else {
+        std.debug.print("OK: {s} updated: {s} -> {s}\n", .{ repos_json_path, src_abs, dest_name });
+    }
+
+    if (!restart_after and !analyze_after) return 0;
+
+    const followup_registry_path = if (registry_override) |path|
+        try resolvePathFromCwd(allocator, cwd_abs, path)
+    else if (inferred_group_paths.registry_json_path.len != 0)
+        inferred_group_paths.registry_json_path
+    else
+        null;
+
+    const start_exit_code = try runStartFollowUp(
+        allocator,
+        target_container_name,
+        followup_registry_path,
+        repos_json_path,
+    );
+    if (start_exit_code != 0) return start_exit_code;
+    if (!analyze_after) return 0;
+
+    return try runAnalyzeFollowUp(allocator, target_container_name, dest_name);
+}
+
+fn run(allocator: Allocator) !u8 {
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+    return runWithArgs(allocator, args);
+}
+
+pub fn main() void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const exit_code = run(arena.allocator()) catch |err| {
+        std.debug.print("Error: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    std.process.exit(exit_code);
+}

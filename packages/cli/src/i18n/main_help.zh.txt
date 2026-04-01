@@ -1,0 +1,24 @@
+用法:
+  {{exe}} <命令> [参数...]
+  {{exe}} -h | --help
+
+命令:
+  doctor, diagnose, 诊断  检查 docker/colima + registry.json + repos.json
+                        使用 --fix 自动创建缺失的 json 文件
+  completion, complete  输出 shell completion 脚本
+  start                 启动或重建 gitnexus 容器
+  analyze               在容器内仓库执行 `gitnexus analyze`
+  add-repo, add_repo    向 repos.json 添加映射: [host_path, dest_name]
+  help, 帮助            显示帮助
+
+说明:
+  查看子命令帮助: {{exe}} <命令> -h
+  未识别命令会透传给 PATH 中同名外部命令
+
+示例:
+  {{exe}} doctor --fix
+  {{exe}} completion zsh > ~/.zsh/completions/_gitn
+  {{exe}} start --tag latest --port 4747
+  {{exe}} analyze --all -j 4 -- --format json
+  {{exe}} add-repo ../my-repo my-repo
+  {{exe}} echo hello

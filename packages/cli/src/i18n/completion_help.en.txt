@@ -1,0 +1,9 @@
+Usage:
+  {{exe}} [zsh]
+
+Options:
+  -h, --help    Show this help message
+
+Examples:
+  {{exe}} zsh
+  {{exe}} zsh > ~/.zsh/completions/_gitn

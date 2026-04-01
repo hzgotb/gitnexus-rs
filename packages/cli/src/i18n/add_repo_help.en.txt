@@ -1,0 +1,11 @@
+Usage:
+  {{exe}} <source-dir> [dest-name] [--restart|--rebuild] [--analyze] [--container <name-or-id>] [--repos <path>] [--registry <path>]
+
+Options:
+  -h, --help      Show this help message
+  --restart       Rebuild container after updating repos.json
+  --rebuild       Alias of --restart
+  --analyze       Rebuild container, then run analyze for the added repo
+  -c, --container Specify target container to rebuild/analyze; otherwise use interactive selection
+  --repos         repos.json to update; infer from container labels when omitted
+  --registry      registry.json for follow-up start; infer from container labels when omitted

@@ -1,8 +1,14 @@
 const builtin = @import("builtin");
+const container_group = @import("../container_group.zig");
+const container_runtime = @import("../container_runtime.zig");
 const std = @import("std");
+const doctor = @import("doctor.zig");
+const i18n = @import("../i18n.zig");
 
 const Allocator = std.mem.Allocator;
 const JsonValue = std.json.Value;
+const help_en = @embedFile("../i18n/start_help.en.txt");
+const help_zh = @embedFile("../i18n/start_help.zh.txt");
 
 const image_repo = "gitnexus";
 const default_tag = "latest";
@@ -21,20 +27,13 @@ const OldContainer = struct {
     status: []const u8,
 };
 
-fn printUsage(exe_name: []const u8) void {
-    std.debug.print(
-        \\Usage:
-        \\  {s} [--tag <tag>] [--port <port>] [--registry <path>]
-        \\
-        \\Options:
-        \\  -h, --help    Show this help message
-        \\  -t, --tag     Override image tag (default: v1)
-        \\  -p, --port    Bind host port directly (1-65535), skip port prompt
-        \\  -r, --registry  Override registry.json path (absolute or relative)
-        \\
-    ,
-        .{exe_name},
-    );
+fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
+    const lang = i18n.detectLangFromEnv(allocator);
+    const tpl = switch (lang) {
+        .zh => help_zh,
+        .en => help_en,
+    };
+    try i18n.printHelpTemplate(allocator, tpl, exe_name);
 }
 
 fn isExitedZero(term: std.process.Child.Term) bool {
@@ -103,6 +102,28 @@ fn collectOldContainers(allocator: Allocator) !std.ArrayList(OldContainer) {
     }
 
     return result;
+}
+
+fn findOldContainerBySelector(containers: []const OldContainer, selector: []const u8) !usize {
+    var exact_idx: ?usize = null;
+    for (containers, 0..) |container, idx| {
+        if (std.mem.eql(u8, container.name, selector) or std.mem.eql(u8, container.id, selector)) {
+            if (exact_idx != null) return error.AmbiguousSelector;
+            exact_idx = idx;
+        }
+    }
+    if (exact_idx) |idx| return idx;
+
+    var prefix_idx: ?usize = null;
+    for (containers, 0..) |container, idx| {
+        if (std.mem.startsWith(u8, container.id, selector)) {
+            if (prefix_idx != null) return error.AmbiguousSelector;
+            prefix_idx = idx;
+        }
+    }
+    if (prefix_idx) |idx| return idx;
+
+    return error.ContainerNotFound;
 }
 
 fn isAllDigits(s: []const u8) bool {
@@ -326,10 +347,7 @@ fn selectContainerIndex(allocator: Allocator, containers: []const OldContainer) 
 }
 
 fn runDocker(allocator: Allocator, argv: []const []const u8) !std.process.Child.RunResult {
-    return std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-    });
+    return container_runtime.runDocker(allocator, argv);
 }
 
 fn printCommandOutput(result: std.process.Child.RunResult) void {
@@ -347,25 +365,24 @@ fn printCommandOutput(result: std.process.Child.RunResult) void {
     }
 }
 
-fn run(allocator: Allocator) !u8 {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
+pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
     var image_tag: []const u8 = default_tag;
     var port_override: ?[]const u8 = null;
     var registry_override: ?[]const u8 = null;
+    var repos_override: ?[]const u8 = null;
+    var rebuild_selector: ?[]const u8 = null;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-            printUsage(args[0]);
+            try printUsage(allocator, args[0]);
             return 0;
         }
         if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--tag")) {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("Error: missing value for {s}\n", .{arg});
-                printUsage(args[0]);
+                try printUsage(allocator, args[0]);
                 return 1;
             }
             const tag = std.mem.trim(u8, args[i], " \t\r\n");
@@ -380,7 +397,7 @@ fn run(allocator: Allocator) !u8 {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("Error: missing value for {s}\n", .{arg});
-                printUsage(args[0]);
+                try printUsage(allocator, args[0]);
                 return 1;
             }
             const port = std.mem.trim(u8, args[i], " \t\r\n");
@@ -395,7 +412,7 @@ fn run(allocator: Allocator) !u8 {
             i += 1;
             if (i >= args.len) {
                 std.debug.print("Error: missing value for {s}\n", .{arg});
-                printUsage(args[0]);
+                try printUsage(allocator, args[0]);
                 return 1;
             }
             const path = std.mem.trim(u8, args[i], " \t\r\n");
@@ -406,29 +423,134 @@ fn run(allocator: Allocator) !u8 {
             registry_override = path;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--repos")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: missing value for {s}\n", .{arg});
+                try printUsage(allocator, args[0]);
+                return 1;
+            }
+            const path = std.mem.trim(u8, args[i], " \t\r\n");
+            if (path.len == 0) {
+                std.debug.print("Error: repos path must not be empty\n", .{});
+                return 1;
+            }
+            repos_override = path;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--rebuild")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: missing value for {s}\n", .{arg});
+                try printUsage(allocator, args[0]);
+                return 1;
+            }
+            const selector = std.mem.trim(u8, args[i], " \t\r\n");
+            if (selector.len == 0) {
+                std.debug.print("Error: rebuild selector must not be empty\n", .{});
+                return 1;
+            }
+            rebuild_selector = selector;
+            continue;
+        }
 
         std.debug.print("Error: unknown argument: {s}\n", .{arg});
-        printUsage(args[0]);
+        try printUsage(allocator, args[0]);
         return 1;
     }
 
-    const image_name = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ image_repo, image_tag });
+    const bootstrap_env = try doctor.checkEnvironment(allocator, .{
+        .create_missing_json = true,
+        .verbose = false,
+        .registry_path = registry_override,
+        .repos_path = repos_override,
+    });
 
-    const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
-    const registry_file = if (registry_override) |path|
-        try resolvePathFromCwd(allocator, cwd_abs, path)
-    else
-        try std.fs.path.join(allocator, &.{ cwd_abs, "registry.json" });
-    const repos_json = try std.fs.path.join(allocator, &.{ cwd_abs, "repos.json" });
-
-    {
-        const file = std.fs.openFileAbsolute(registry_file, .{}) catch {
-            std.debug.print("Error: missing config file: {s}\n", .{registry_file});
+    const old_containers = collectOldContainers(allocator) catch |err| switch (err) {
+        error.DockerPsFailed => return 1,
+        else => return err,
+    };
+    var launch_mode: LaunchMode = .create_new;
+    var rebuild_target: ?OldContainer = null;
+    var inherited_group_paths = container_group.JsonGroupPaths{};
+    if (rebuild_selector) |selector| {
+        if (old_containers.items.len == 0) {
+            std.debug.print("Error: no existing container available to rebuild: {s}\n", .{selector});
             return 1;
+        }
+
+        const selected_index = findOldContainerBySelector(old_containers.items, selector) catch |err| switch (err) {
+            error.ContainerNotFound => {
+                std.debug.print("Error: target container to rebuild not found: {s}\n", .{selector});
+                std.debug.print("Available existing containers:\n", .{});
+                for (old_containers.items) |old| {
+                    std.debug.print("  {s} ({s})\n", .{ old.name, old.id });
+                }
+                return 1;
+            },
+            error.AmbiguousSelector => {
+                std.debug.print("Error: ambiguous rebuild selector: {s}\n", .{selector});
+                std.debug.print("Please specify full name/id. Available existing containers:\n", .{});
+                for (old_containers.items) |old| {
+                    std.debug.print("  {s} ({s})\n", .{ old.name, old.id });
+                }
+                return 1;
+            },
+            else => return err,
         };
-        file.close();
+
+        launch_mode = .rebuild_existing;
+        rebuild_target = old_containers.items[selected_index];
+        inherited_group_paths = container_group.inspectContainerJsonPaths(allocator, rebuild_target.?.name) catch container_group.JsonGroupPaths{};
+        std.debug.print("Rebuilding container: {s}\n", .{rebuild_target.?.name});
+    } else if (old_containers.items.len != 0) {
+        std.debug.print("Found existing containers:\n", .{});
+        for (old_containers.items, 0..) |old, idx| {
+            std.debug.print("  [{d}] {s} ({s})\n", .{ idx + 1, old.name, old.status });
+        }
+        std.debug.print("Choose mode:\n", .{});
+        std.debug.print("  [n] new container\n", .{});
+        std.debug.print("  [r] rebuild existing\n", .{});
+        std.debug.print("  [c] cancel\n", .{});
+        const mode_input = try promptLine(allocator, "Your choice (default n): ");
+        const mode_trimmed = std.mem.trim(u8, mode_input, " \t\r\n");
+        if (mode_trimmed.len != 0 and std.ascii.toLower(mode_trimmed[0]) == 'r') {
+            launch_mode = .rebuild_existing;
+            const selected_index = try selectContainerIndex(allocator, old_containers.items);
+            rebuild_target = old_containers.items[selected_index];
+            inherited_group_paths = container_group.inspectContainerJsonPaths(allocator, rebuild_target.?.name) catch container_group.JsonGroupPaths{};
+            std.debug.print("Rebuilding container: {s}\n", .{rebuild_target.?.name});
+        } else if (mode_trimmed.len != 0 and std.ascii.toLower(mode_trimmed[0]) == 'c') {
+            launch_mode = .cancel;
+        } else if (mode_trimmed.len != 0 and std.ascii.toLower(mode_trimmed[0]) != 'n') {
+            std.debug.print("Warning: invalid mode input, fallback to new container.\n", .{});
+        }
     }
 
+    if (launch_mode == .cancel) {
+        std.debug.print("Canceled by user.\n", .{});
+        return 130;
+    }
+
+    const env = try doctor.checkEnvironment(allocator, .{
+        .create_missing_json = true,
+        .verbose = false,
+        .registry_path = registry_override orelse
+            if (inherited_group_paths.registry_json_path.len != 0)
+                inherited_group_paths.registry_json_path
+            else
+                bootstrap_env.registry_json_path,
+        .repos_path = repos_override orelse
+            if (inherited_group_paths.repos_json_path.len != 0)
+                inherited_group_paths.repos_json_path
+            else
+                bootstrap_env.repos_json_path,
+    });
+    const cwd_abs = env.cwd_abs;
+    const registry_file = env.registry_json_path;
+    const repos_json = env.repos_json_path;
+
+    const image_name = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ image_repo, image_tag });
     const repos_content = std.fs.cwd().readFileAlloc(allocator, repos_json, 16 * 1024 * 1024) catch {
         std.debug.print("Error: missing repos list file: {s}\n", .{repos_json});
         return 1;
@@ -523,41 +645,6 @@ fn run(allocator: Allocator) !u8 {
         try repo_mounts.append(allocator, mount);
     }
 
-    const old_containers = collectOldContainers(allocator) catch |err| switch (err) {
-        error.DockerPsFailed => return 1,
-        else => return err,
-    };
-
-    var launch_mode: LaunchMode = .create_new;
-    var rebuild_target: ?OldContainer = null;
-    if (old_containers.items.len != 0) {
-        std.debug.print("Found existing containers:\n", .{});
-        for (old_containers.items, 0..) |old, idx| {
-            std.debug.print("  [{d}] {s} ({s})\n", .{ idx + 1, old.name, old.status });
-        }
-        std.debug.print("Choose mode:\n", .{});
-        std.debug.print("  [n] new container\n", .{});
-        std.debug.print("  [r] rebuild existing\n", .{});
-        std.debug.print("  [c] cancel\n", .{});
-        const mode_input = try promptLine(allocator, "Your choice (default n): ");
-        const mode_trimmed = std.mem.trim(u8, mode_input, " \t\r\n");
-        if (mode_trimmed.len != 0 and std.ascii.toLower(mode_trimmed[0]) == 'r') {
-            launch_mode = .rebuild_existing;
-            const selected_index = try selectContainerIndex(allocator, old_containers.items);
-            rebuild_target = old_containers.items[selected_index];
-            std.debug.print("Rebuilding container: {s}\n", .{rebuild_target.?.name});
-        } else if (mode_trimmed.len != 0 and std.ascii.toLower(mode_trimmed[0]) == 'c') {
-            launch_mode = .cancel;
-        } else if (mode_trimmed.len != 0 and std.ascii.toLower(mode_trimmed[0]) != 'n') {
-            std.debug.print("Warning: invalid mode input, fallback to new container.\n", .{});
-        }
-    }
-
-    if (launch_mode == .cancel) {
-        std.debug.print("Canceled by user.\n", .{});
-        return 0;
-    }
-
     const container_name = switch (launch_mode) {
         .create_new => try generateUniqueContainerName(allocator, old_containers.items),
         .rebuild_existing => rebuild_target.?.name,
@@ -581,29 +668,39 @@ fn run(allocator: Allocator) !u8 {
             "";
 
         if (old_port.len != 0) {
-            std.debug.print("Existing host port: {s}\n", .{old_port});
-            std.debug.print("Choose: [y] reuse old port | [number] set new port | [n] no binding\n", .{});
-            const user_input = try promptLine(allocator, "Your choice (default y): ");
-            const trimmed = std.mem.trim(u8, user_input, " \t\r\n");
-            const effective_input = if (trimmed.len == 0) "y" else trimmed;
-
-            const lowered = try allocator.dupe(u8, effective_input);
-            for (lowered) |*c| c.* = std.ascii.toLower(c.*);
-
-            if (std.mem.eql(u8, lowered, "y")) {
+            if (rebuild_selector != null) {
                 target_port = old_port;
-            } else if (std.mem.eql(u8, lowered, "n")) {
-                target_port = "";
-            } else if (isAllDigits(effective_input)) {
-                target_port = effective_input;
+                std.debug.print("Reusing existing host port: {s}\n", .{old_port});
             } else {
-                std.debug.print("Warning: invalid input; fallback to old port ({s}).\n", .{old_port});
-                target_port = old_port;
+                std.debug.print("Existing host port: {s}\n", .{old_port});
+                std.debug.print("Choose: [y] reuse old port | [number] set new port | [n] no binding\n", .{});
+                const user_input = try promptLine(allocator, "Your choice (default y): ");
+                const trimmed = std.mem.trim(u8, user_input, " \t\r\n");
+                const effective_input = if (trimmed.len == 0) "y" else trimmed;
+
+                const lowered = try allocator.dupe(u8, effective_input);
+                for (lowered) |*c| c.* = std.ascii.toLower(c.*);
+
+                if (std.mem.eql(u8, lowered, "y")) {
+                    target_port = old_port;
+                } else if (std.mem.eql(u8, lowered, "n")) {
+                    target_port = "";
+                } else if (isAllDigits(effective_input)) {
+                    target_port = effective_input;
+                } else {
+                    std.debug.print("Warning: invalid input; fallback to old port ({s}).\n", .{old_port});
+                    target_port = old_port;
+                }
             }
         } else {
-            std.debug.print("Container has no bound host port.\n", .{});
-            const user_input = try promptLine(allocator, "Input host port (empty to skip): ");
-            target_port = std.mem.trim(u8, user_input, " \t\r\n");
+            if (rebuild_selector != null) {
+                std.debug.print("Container has no bound host port; keep no binding.\n", .{});
+                target_port = "";
+            } else {
+                std.debug.print("Container has no bound host port.\n", .{});
+                const user_input = try promptLine(allocator, "Input host port (empty to skip): ");
+                target_port = std.mem.trim(u8, user_input, " \t\r\n");
+            }
         }
     } else {
         const user_input = try promptLine(allocator, "Input host port to bind (empty to skip): ");
@@ -622,6 +719,10 @@ fn run(allocator: Allocator) !u8 {
     var docker_args = std.ArrayList([]const u8).empty;
     try docker_args.appendSlice(allocator, &.{ "docker", "run", "-d" });
     try docker_args.appendSlice(allocator, &.{ "--name", container_name });
+    try container_group.appendDockerJsonLabels(allocator, &docker_args, .{
+        .registry_json_path = registry_file,
+        .repos_json_path = repos_json,
+    });
 
     const registry_mount = try std.fmt.allocPrint(allocator, "{s}:/root/.gitnexus/registry.json", .{registry_file});
     try docker_args.appendSlice(allocator, &.{ "-v", registry_mount });
@@ -662,6 +763,12 @@ fn run(allocator: Allocator) !u8 {
     std.debug.print("-----------------------------------------------\n", .{});
 
     return 0;
+}
+
+fn run(allocator: Allocator) !u8 {
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+    return runWithArgs(allocator, args);
 }
 
 pub fn main() void {

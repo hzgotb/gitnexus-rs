@@ -1,0 +1,24 @@
+Usage:
+  {{exe}} <command> [args...]
+  {{exe}} -h | --help
+
+Commands:
+  doctor, diagnose, 诊断  Check docker/colima + registry.json + repos.json
+                        Use --fix to auto-create missing json files
+  completion, complete  Print shell completion scripts
+  start                 Start or rebuild gitnexus container
+  analyze               Run `gitnexus analyze` inside container repos
+  add-repo, add_repo    Add mapping to repos.json: [host_path, dest_name]
+  help                  Same as -h/--help
+
+Notes:
+  Run subcommand help via: {{exe}} <command> -h
+  Unknown command is forwarded to external executable in PATH
+
+Examples:
+  {{exe}} doctor --fix
+  {{exe}} completion zsh > ~/.zsh/completions/_gitn
+  {{exe}} start --tag latest --port 4747
+  {{exe}} analyze --all -j 4 -- --format json
+  {{exe}} add-repo ../my-repo my-repo
+  {{exe}} echo hello

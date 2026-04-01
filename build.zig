@@ -31,35 +31,16 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const add_repo_exe = addExecutableCompat(b, "add_repo", "src/add_repo.zig", target, optimize);
-    const start_exe = addExecutableCompat(b, "start", "src/start.zig", target, optimize);
-    const analyze_exe = addExecutableCompat(b, "analyze", "src/analyze.zig", target, optimize);
+    const gitn_exe = addExecutableCompat(b, "gitn", "packages/cli/src/main.zig", target, optimize);
+    b.installArtifact(gitn_exe);
 
-    b.installArtifact(add_repo_exe);
-    b.installArtifact(start_exe);
-    b.installArtifact(analyze_exe);
-
-    const run_start_cmd = b.addRunArtifact(start_exe);
+    const run_gitn_cmd = b.addRunArtifact(gitn_exe);
     if (b.args) |args| {
-        run_start_cmd.addArgs(args);
+        run_gitn_cmd.addArgs(args);
     }
-    const run_step = b.step("run", "Run start");
-    run_step.dependOn(&run_start_cmd.step);
+    const run_step = b.step("run", "Run gitn");
+    run_step.dependOn(&run_gitn_cmd.step);
 
-    const run_add_repo_cmd = b.addRunArtifact(add_repo_exe);
-    if (b.args) |args| {
-        run_add_repo_cmd.addArgs(args);
-    }
-    const run_add_repo_step = b.step("run-add-repo", "Run add_repo");
-    run_add_repo_step.dependOn(&run_add_repo_cmd.step);
-
-    const run_start_step = b.step("run-start", "Run start");
-    run_start_step.dependOn(&run_start_cmd.step);
-
-    const run_analyze_cmd = b.addRunArtifact(analyze_exe);
-    if (b.args) |args| {
-        run_analyze_cmd.addArgs(args);
-    }
-    const run_analyze_step = b.step("run-analyze", "Run analyze");
-    run_analyze_step.dependOn(&run_analyze_cmd.step);
+    const run_gitn_step = b.step("run-gitn", "Run gitn");
+    run_gitn_step.dependOn(&run_gitn_cmd.step);
 }
