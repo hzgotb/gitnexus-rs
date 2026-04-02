@@ -6,7 +6,6 @@ const Allocator = std.mem.Allocator;
 const JsonValue = std.json.Value;
 const max_json_size: usize = 16 * 1024 * 1024;
 const help_en = @embedFile("../i18n/doctor_help.en.txt");
-const help_zh = @embedFile("../i18n/doctor_help.zh.txt");
 
 pub const CheckOptions = struct {
     create_missing_json: bool = false,
@@ -32,12 +31,7 @@ const ManagedContainer = struct {
 };
 
 fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
-    const lang = i18n.detectLangFromEnv(allocator);
-    const tpl = switch (lang) {
-        .zh => help_zh,
-        .en => help_en,
-    };
-    try i18n.printHelpTemplate(allocator, tpl, exe_name);
+    try i18n.printHelpTemplate(allocator, help_en, exe_name);
 }
 
 fn isExitedZero(term: std.process.Child.Term) bool {

@@ -1,9 +1,0 @@
-用法:
-  {{exe}} [zsh]
-
-选项:
-  -h, --help    显示帮助信息
-
-示例:
-  {{exe}} zsh
-  {{exe}} zsh > ~/.zsh/completions/_gitn

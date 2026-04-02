@@ -1,5 +1,4 @@
 const std = @import("std");
-const i18n = @import("i18n.zig");
 
 const Allocator = std.mem.Allocator;
 const EnvMap = std.process.EnvMap;
@@ -122,21 +121,10 @@ fn savePreferredBackend(allocator: Allocator, backend: Backend) !void {
 }
 
 fn selectPreferredBackendInteractive(allocator: Allocator) !Backend {
-    const lang = i18n.detectLangFromEnv(allocator);
-    switch (lang) {
-        .zh => {
-            std.debug.print("检测到多个可用容器运行时：\n", .{});
-            std.debug.print("  [1] docker\n", .{});
-            std.debug.print("  [2] colima\n", .{});
-            std.debug.print("请选择 gitn 默认使用的运行时（默认 1）: ", .{});
-        },
-        .en => {
-            std.debug.print("Multiple container runtimes are available:\n", .{});
-            std.debug.print("  [1] docker\n", .{});
-            std.debug.print("  [2] colima\n", .{});
-            std.debug.print("Select the default runtime for gitn (default 1): ", .{});
-        },
-    }
+    std.debug.print("Multiple container runtimes are available:\n", .{});
+    std.debug.print("  [1] docker\n", .{});
+    std.debug.print("  [2] colima\n", .{});
+    std.debug.print("Select the default runtime for gitn (default 1): ", .{});
 
     const input = try readLineAlloc(allocator);
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
@@ -282,10 +270,7 @@ pub fn resolve(allocator: Allocator) !ResolvedRuntime {
             if (canPromptForChoice()) {
                 const selected = try selectPreferredBackendInteractive(allocator);
                 try savePreferredBackend(allocator, selected);
-                switch (i18n.detectLangFromEnv(allocator)) {
-                    .zh => std.debug.print("已保存默认运行时: {s}\n", .{backendLabel(selected)}),
-                    .en => std.debug.print("Saved default runtime: {s}\n", .{backendLabel(selected)}),
-                }
+                std.debug.print("Saved default runtime: {s}\n", .{backendLabel(selected)});
                 break :blk selected;
             }
             break :blk .docker;

@@ -6,10 +6,8 @@ const completion_cmd = @import("commands/completion.zig");
 const doctor_cmd = @import("commands/doctor.zig");
 const start_cmd = @import("commands/start.zig");
 const main_help_en = @embedFile("i18n/main_help.en.txt");
-const main_help_zh = @embedFile("i18n/main_help.zh.txt");
 
 const Allocator = std.mem.Allocator;
-const UiLang = i18n.UiLang;
 
 const BuiltinCommand = enum {
     help,
@@ -21,12 +19,8 @@ const BuiltinCommand = enum {
     external,
 };
 
-fn printUsage(allocator: Allocator, exe_name: []const u8, lang: UiLang) !void {
-    const tpl = switch (lang) {
-        .zh => main_help_zh,
-        .en => main_help_en,
-    };
-    try i18n.printHelpTemplate(allocator, tpl, exe_name);
+fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
+    try i18n.printHelpTemplate(allocator, main_help_en, exe_name);
 }
 
 fn exitCodeFromTerm(term: std.process.Child.Term) u8 {
@@ -37,10 +31,10 @@ fn exitCodeFromTerm(term: std.process.Child.Term) u8 {
 }
 
 fn classifyCommand(subcommand: []const u8) BuiltinCommand {
-    if (std.mem.eql(u8, subcommand, "-h") or std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "help") or std.mem.eql(u8, subcommand, "帮助")) {
+    if (std.mem.eql(u8, subcommand, "-h") or std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "help")) {
         return .help;
     }
-    if (std.mem.eql(u8, subcommand, "doctor") or std.mem.eql(u8, subcommand, "diagnose") or std.mem.eql(u8, subcommand, "诊断")) return .doctor;
+    if (std.mem.eql(u8, subcommand, "doctor") or std.mem.eql(u8, subcommand, "diagnose")) return .doctor;
     if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "complete")) return .completion;
     if (std.mem.eql(u8, subcommand, "start")) return .start;
     if (std.mem.eql(u8, subcommand, "analyze")) return .analyze;
@@ -49,56 +43,15 @@ fn classifyCommand(subcommand: []const u8) BuiltinCommand {
 }
 
 const GlobalParseResult = struct {
-    lang: UiLang,
     command_index: usize,
 };
 
 fn parseGlobalOptions(allocator: Allocator, args: []const []const u8) !GlobalParseResult {
-    var lang = i18n.detectLangFromEnv(allocator);
-    var idx: usize = 1;
-
-    while (idx < args.len) {
-        const arg = args[idx];
-
-        if (std.mem.eql(u8, arg, "--zh")) {
-            lang = .zh;
-            idx += 1;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--en")) {
-            lang = .en;
-            idx += 1;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--lang")) {
-            if (idx + 1 >= args.len) {
-                std.debug.print("Error: missing value for --lang\n", .{});
-                return error.InvalidArguments;
-            }
-            const parsed = i18n.parseLangValue(args[idx + 1]) orelse {
-                std.debug.print("Error: unsupported language: {s}\n", .{args[idx + 1]});
-                return error.InvalidArguments;
-            };
-            lang = parsed;
-            idx += 2;
-            continue;
-        }
-        if (std.mem.startsWith(u8, arg, "--lang=")) {
-            const raw = arg["--lang=".len..];
-            const parsed = i18n.parseLangValue(raw) orelse {
-                std.debug.print("Error: unsupported language: {s}\n", .{raw});
-                return error.InvalidArguments;
-            };
-            lang = parsed;
-            idx += 1;
-            continue;
-        }
-        break;
-    }
+    _ = allocator;
+    _ = args;
 
     return .{
-        .lang = lang,
-        .command_index = idx,
+        .command_index = 1,
     };
 }
 
@@ -147,13 +100,12 @@ fn run(allocator: Allocator) !u8 {
     defer std.process.argsFree(allocator, args);
 
     const global = parseGlobalOptions(allocator, args) catch {
-        try printUsage(allocator, args[0], i18n.detectLangFromEnv(allocator));
+        try printUsage(allocator, args[0]);
         return 1;
     };
-    i18n.setForcedLang(global.lang);
 
     if (global.command_index >= args.len) {
-        try printUsage(allocator, args[0], global.lang);
+        try printUsage(allocator, args[0]);
         return 1;
     }
 
@@ -161,8 +113,7 @@ fn run(allocator: Allocator) !u8 {
     const rest = if (global.command_index + 1 < args.len) args[global.command_index + 1 ..] else &.{};
     const selected = classifyCommand(first);
     if (selected == .help) {
-        const help_lang: UiLang = if (std.mem.eql(u8, first, "帮助")) .zh else global.lang;
-        try printUsage(allocator, args[0], help_lang);
+        try printUsage(allocator, args[0]);
         return 0;
     }
     if (selected != .external) {
@@ -191,4 +142,24 @@ pub fn main() void {
 
 test {
     _ = add_repo_cmd;
+    _ = completion_cmd;
+}
+
+test "global language flags are not parsed as CLI-wide options" {
+    const testing = std.testing;
+    const parsed = try parseGlobalOptions(testing.allocator, &.{
+        "gitn",
+        "--lang",
+        "zh",
+        "analyze",
+    });
+
+    try testing.expectEqual(@as(usize, 1), parsed.command_index);
+}
+
+test "Chinese command aliases are no longer built-in commands" {
+    const testing = std.testing;
+
+    try testing.expectEqual(BuiltinCommand.external, classifyCommand("帮助"));
+    try testing.expectEqual(BuiltinCommand.external, classifyCommand("诊断"));
 }

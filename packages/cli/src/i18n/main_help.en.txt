@@ -3,7 +3,7 @@ Usage:
   {{exe}} -h | --help
 
 Commands:
-  doctor, diagnose, 诊断  Check docker/colima + registry.json + repos.json
+  doctor, diagnose      Check docker/colima + registry.json + repos.json
                         Use --fix to auto-create missing json files
   completion, complete  Print shell completion scripts
   start                 Start or rebuild gitnexus container

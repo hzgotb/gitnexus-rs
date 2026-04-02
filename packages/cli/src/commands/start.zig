@@ -8,7 +8,6 @@ const i18n = @import("../i18n.zig");
 const Allocator = std.mem.Allocator;
 const JsonValue = std.json.Value;
 const help_en = @embedFile("../i18n/start_help.en.txt");
-const help_zh = @embedFile("../i18n/start_help.zh.txt");
 
 const image_repo = "gitnexus";
 const default_tag = "latest";
@@ -28,12 +27,7 @@ const OldContainer = struct {
 };
 
 fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
-    const lang = i18n.detectLangFromEnv(allocator);
-    const tpl = switch (lang) {
-        .zh => help_zh,
-        .en => help_en,
-    };
-    try i18n.printHelpTemplate(allocator, tpl, exe_name);
+    try i18n.printHelpTemplate(allocator, help_en, exe_name);
 }
 
 fn isExitedZero(term: std.process.Child.Term) bool {

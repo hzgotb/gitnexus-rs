@@ -3,16 +3,10 @@ const i18n = @import("../i18n.zig");
 
 const Allocator = std.mem.Allocator;
 const help_en = @embedFile("../i18n/completion_help.en.txt");
-const help_zh = @embedFile("../i18n/completion_help.zh.txt");
 const zsh_completion = @embedFile("../completions/gitn.zsh");
 
 fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
-    const lang = i18n.detectLangFromEnv(allocator);
-    const tpl = switch (lang) {
-        .zh => help_zh,
-        .en => help_en,
-    };
-    try i18n.printHelpTemplate(allocator, tpl, exe_name);
+    try i18n.printHelpTemplate(allocator, help_en, exe_name);
 }
 
 pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
@@ -54,4 +48,14 @@ pub fn main() void {
         std.process.exit(1);
     };
     std.process.exit(exit_code);
+}
+
+test "zsh completion does not advertise removed language features" {
+    const testing = std.testing;
+
+    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "--lang"));
+    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "--zh"));
+    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "--en"));
+    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "帮助"));
+    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "诊断"));
 }

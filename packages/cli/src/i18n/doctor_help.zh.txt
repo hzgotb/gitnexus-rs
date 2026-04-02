@@ -1,8 +1,0 @@
-用法:
-  {{exe}} [--registry <path>] [--repos <path>] [--fix]
-
-选项:
-  -h, --help     显示帮助信息
-  -r, --registry 指定 registry.json 路径（绝对或相对）
-  --repos        指定 repos.json 路径（绝对或相对）
-  --fix          自动创建缺失的 registry.json / repos.json 默认文件

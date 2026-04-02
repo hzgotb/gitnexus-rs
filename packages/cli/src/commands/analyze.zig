@@ -7,7 +7,6 @@ const i18n = @import("../i18n.zig");
 const Allocator = std.mem.Allocator;
 const JsonValue = std.json.Value;
 const help_en = @embedFile("../i18n/analyze_help.en.txt");
-const help_zh = @embedFile("../i18n/analyze_help.zh.txt");
 
 const container_name_prefix = "gitnexus";
 const registry_file_name = "registry.json";
@@ -57,12 +56,7 @@ fn warnInvalidRegistryFile(path: []const u8) void {
 }
 
 fn printUsage(allocator: Allocator, exe_name: []const u8) !void {
-    const lang = i18n.detectLangFromEnv(allocator);
-    const tpl = switch (lang) {
-        .zh => help_zh,
-        .en => help_en,
-    };
-    try i18n.printHelpTemplate(allocator, tpl, exe_name);
+    try i18n.printHelpTemplate(allocator, help_en, exe_name);
 }
 
 fn resolvePathFromCwd(
@@ -256,39 +250,24 @@ fn makeIndexedAtDisplay(allocator: Allocator, indexed_at_raw: []const u8) ![]con
     return try allocator.dupe(u8, formatIndexedAtUtcForDisplay(&fallback_buf, indexed_at_raw));
 }
 
-fn repoSelectionHint(lang: i18n.UiLang) []const u8 {
-    return switch (lang) {
-        .zh => "使用上下方向键选择，回车确认，q/c 取消，Ctrl+C 退出",
-        .en => "Use Up/Down arrows, Enter to confirm, q/c to cancel, Ctrl+C to exit",
-    };
+fn repoSelectionHint() []const u8 {
+    return "Use Up/Down arrows, Enter to confirm, q/c to cancel, Ctrl+C to exit";
 }
 
-fn repoHistoryGroupLabel(lang: i18n.UiLang) []const u8 {
-    return switch (lang) {
-        .zh => "已分析过",
-        .en => "Indexed",
-    };
+fn repoHistoryGroupLabel() []const u8 {
+    return "Indexed";
 }
 
-fn repoFreshGroupLabel(lang: i18n.UiLang) []const u8 {
-    return switch (lang) {
-        .zh => "未分析",
-        .en => "Not indexed",
-    };
+fn repoFreshGroupLabel() []const u8 {
+    return "Not indexed";
 }
 
-fn repoLastOperatedLabel(lang: i18n.UiLang) []const u8 {
-    return switch (lang) {
-        .zh => "索引时间",
-        .en => "Indexed at",
-    };
+fn repoLastOperatedLabel() []const u8 {
+    return "Indexed at";
 }
 
-fn cancelledMessage(lang: i18n.UiLang) []const u8 {
-    return switch (lang) {
-        .zh => "已取消。",
-        .en => "Cancelled.",
-    };
+fn cancelledMessage() []const u8 {
+    return "Cancelled.";
 }
 
 fn isCancelInput(input: []const u8) bool {
@@ -298,7 +277,7 @@ fn isCancelInput(input: []const u8) bool {
     if (std.ascii.eqlIgnoreCase(input, "c")) return true;
     if (std.ascii.eqlIgnoreCase(input, "cancel")) return true;
     if (std.ascii.eqlIgnoreCase(input, "exit")) return true;
-    return std.mem.eql(u8, input, "取消");
+    return false;
 }
 
 fn firstStringField(obj: *const std.json.ObjectMap, keys: []const []const u8) []const u8 {
@@ -382,14 +361,13 @@ fn printRepoSelectionHeader(clear_line: bool, label: []const u8) void {
 }
 
 fn printRepoSelectionEntry(
-    lang: i18n.UiLang,
     clear_line: bool,
     prefix: []const u8,
     display_index: usize,
     repo: RepoDisplayEntry,
 ) void {
     if (repo.indexed_at_display) |time_text| {
-        const last_label = repoLastOperatedLabel(lang);
+        const last_label = repoLastOperatedLabel();
         if (clear_line) {
             std.debug.print(
                 "\x1b[2K\r{s}[{d}] {s} ({s}: {s})\n",
@@ -409,7 +387,6 @@ fn printRepoSelectionEntry(
 }
 
 fn printRepoSelectionList(
-    lang: i18n.UiLang,
     repos: []const RepoDisplayEntry,
     selected: ?usize,
     clear_line: bool,
@@ -420,17 +397,17 @@ fn printRepoSelectionList(
     for (repos, 0..) |repo, idx| {
         if (repo.has_index and !printed_history_header) {
             printed_history_header = true;
-            printRepoSelectionHeader(clear_line, repoHistoryGroupLabel(lang));
+            printRepoSelectionHeader(clear_line, repoHistoryGroupLabel());
         } else if (!repo.has_index and !printed_fresh_header) {
             printed_fresh_header = true;
-            printRepoSelectionHeader(clear_line, repoFreshGroupLabel(lang));
+            printRepoSelectionHeader(clear_line, repoFreshGroupLabel());
         }
 
         const prefix = if (selected) |selected_idx|
             if (selected_idx == idx) "> " else "  "
         else
             "  ";
-        printRepoSelectionEntry(lang, clear_line, prefix, idx + 1, repo);
+        printRepoSelectionEntry(clear_line, prefix, idx + 1, repo);
     }
 }
 
@@ -879,22 +856,14 @@ fn collectReposInContainer(allocator: Allocator, container_name: []const u8) !st
 }
 
 fn selectContainerByPrompt(allocator: Allocator, containers: []const Container) !usize {
-    const lang = i18n.detectLangFromEnv(allocator);
     for (containers, 0..) |container, idx| {
         std.debug.print("  [{d}] {s} ({s})\n", .{ idx + 1, container.name, container.status });
     }
-    const prompt = switch (lang) {
-        .zh => try std.fmt.allocPrint(
-            allocator,
-            "选择容器 (1-{d}, 默认 1, q/c 取消): ",
-            .{containers.len},
-        ),
-        .en => try std.fmt.allocPrint(
-            allocator,
-            "Select container (1-{d}, default 1, q/c cancel): ",
-            .{containers.len},
-        ),
-    };
+    const prompt = try std.fmt.allocPrint(
+        allocator,
+        "Select container (1-{d}, default 1, q/c cancel): ",
+        .{containers.len},
+    );
     const input = try promptLine(allocator, prompt);
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
 
@@ -939,21 +908,13 @@ fn findRepoByName(repos: []const []const u8, repo_name: []const u8) !usize {
 }
 
 fn selectRepoByPrompt(allocator: Allocator, repos: []const RepoDisplayEntry) !usize {
-    const lang = i18n.detectLangFromEnv(allocator);
-    printRepoSelectionList(lang, repos, null, false);
+    printRepoSelectionList(repos, null, false);
 
-    const prompt = switch (lang) {
-        .zh => try std.fmt.allocPrint(
-            allocator,
-            "请选择仓库 (1-{d}, 默认 1, q/c 取消): ",
-            .{repos.len},
-        ),
-        .en => try std.fmt.allocPrint(
-            allocator,
-            "Select repo (1-{d}, default 1, q/c cancel): ",
-            .{repos.len},
-        ),
-    };
+    const prompt = try std.fmt.allocPrint(
+        allocator,
+        "Select repo (1-{d}, default 1, q/c cancel): ",
+        .{repos.len},
+    );
     const input = try promptLine(allocator, prompt);
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
 
@@ -969,7 +930,6 @@ fn selectRepoByArrow(allocator: Allocator, repos: []const RepoDisplayEntry) !usi
     if (!std.fs.File.stdin().isTty()) return error.NotATerminal;
     if (repos.len == 0) return error.EmptyRepoList;
 
-    const lang = i18n.detectLangFromEnv(allocator);
     const saved_stty = try getSttyState(allocator);
     try setSttyRawNoEcho(allocator);
     std.debug.print("\x1b[?25l", .{});
@@ -991,8 +951,8 @@ fn selectRepoByArrow(allocator: Allocator, repos: []const RepoDisplayEntry) !usi
             rendered_once = true;
         }
 
-        std.debug.print("\x1b[2K\r{s}\n", .{repoSelectionHint(lang)});
-        printRepoSelectionList(lang, repos, selected, true);
+        std.debug.print("\x1b[2K\r{s}\n", .{repoSelectionHint()});
+        printRepoSelectionList(repos, selected, true);
 
         var key: [1]u8 = undefined;
         const n = try stdin_file.read(&key);
@@ -1614,7 +1574,7 @@ pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
         std.debug.print("Multiple running containers found:\n", .{});
         break :blk selectContainerByPrompt(allocator, containers.items) catch |err| switch (err) {
             error.UserCancelled => {
-                std.debug.print("{s}\n", .{cancelledMessage(i18n.detectLangFromEnv(allocator))});
+                std.debug.print("{s}\n", .{cancelledMessage()});
                 return 130;
             },
             else => return err,
@@ -1672,7 +1632,7 @@ pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
         std.debug.print("Multiple repos found in container:\n", .{});
         const selected_index = selectRepoIndex(allocator, display_entries.items) catch |err| switch (err) {
             error.UserCancelled => {
-                std.debug.print("{s}\n", .{cancelledMessage(i18n.detectLangFromEnv(allocator))});
+                std.debug.print("{s}\n", .{cancelledMessage()});
                 return 130;
             },
             else => return err,
