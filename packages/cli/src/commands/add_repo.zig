@@ -408,103 +408,46 @@ fn runAnalyzeFollowUp(
     return analyze_cmd.runWithArgs(allocator, forwarded.items);
 }
 
+fn resolveEffectiveSourcePath(
+    allocator: Allocator,
+    cwd_abs: []const u8,
+    home_dir: []const u8,
+    parsed: ParsedAddRepoArgs,
+) ![]const u8 {
+    const src_raw = parsed.src_raw orelse return error.InvalidArguments;
+
+    if (parsed.from_source_remote) |remote| {
+        return ensureRemoteSourceReady(allocator, cwd_abs, home_dir, src_raw, remote);
+    }
+
+    return std.fs.cwd().realpathAlloc(allocator, src_raw) catch {
+        std.debug.print("Error: source directory does not exist: {s}\n", .{src_raw});
+        return error.SourceDirMissing;
+    };
+}
+
 pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
-    var src_raw: ?[]const u8 = null;
-    var dest_name_arg: ?[]const u8 = null;
-    var restart_after = false;
-    var analyze_after = false;
-    var container_selector: ?[]const u8 = null;
-    var repos_override: ?[]const u8 = null;
-    var registry_override: ?[]const u8 = null;
-
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-            try printUsage(allocator, args[0]);
-            return 0;
-        }
-        if (std.mem.eql(u8, arg, "--restart") or std.mem.eql(u8, arg, "--rebuild")) {
-            restart_after = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--analyze")) {
-            analyze_after = true;
-            restart_after = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--container")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: missing value for {s}\n", .{arg});
-                try printUsage(allocator, args[0]);
-                return 1;
-            }
-            const selector = std.mem.trim(u8, args[i], " \t\r\n");
-            if (selector.len == 0) {
-                std.debug.print("Error: container selector must not be empty\n", .{});
-                return 1;
-            }
-            container_selector = selector;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--repos")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: missing value for {s}\n", .{arg});
-                try printUsage(allocator, args[0]);
-                return 1;
-            }
-            const path = std.mem.trim(u8, args[i], " \t\r\n");
-            if (path.len == 0) {
-                std.debug.print("Error: repos path must not be empty\n", .{});
-                return 1;
-            }
-            repos_override = path;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--registry")) {
-            i += 1;
-            if (i >= args.len) {
-                std.debug.print("Error: missing value for {s}\n", .{arg});
-                try printUsage(allocator, args[0]);
-                return 1;
-            }
-            const path = std.mem.trim(u8, args[i], " \t\r\n");
-            if (path.len == 0) {
-                std.debug.print("Error: registry path must not be empty\n", .{});
-                return 1;
-            }
-            registry_override = path;
-            continue;
-        }
-        if (std.mem.startsWith(u8, arg, "-")) {
-            std.debug.print("Error: unknown argument: {s}\n", .{arg});
-            try printUsage(allocator, args[0]);
-            return 1;
-        }
-
-        if (src_raw == null) {
-            src_raw = arg;
-            continue;
-        }
-        if (dest_name_arg == null) {
-            dest_name_arg = arg;
-            continue;
-        }
-
-        std.debug.print("Error: too many positional arguments\n", .{});
+    const parsed = parseAddRepoArgs(args) catch {
+        try printUsage(allocator, args[0]);
+        return 1;
+    };
+    if (parsed.help_requested) {
+        try printUsage(allocator, args[0]);
+        return 0;
+    }
+    if (parsed.src_raw == null) {
         try printUsage(allocator, args[0]);
         return 1;
     }
 
-    if (src_raw == null) {
-        try printUsage(allocator, args[0]);
-        return 1;
-    }
+    const container_selector = parsed.container_selector;
+    const repos_override = parsed.repos_override;
+    const registry_override = parsed.registry_override;
+    const restart_after = parsed.restart_after;
+    const analyze_after = parsed.analyze_after;
 
-    const src_raw_value = src_raw.?;
     const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const home_dir = try detectHomeDir(allocator);
     const target_container_name = if (container_selector) |selector|
         resolveContainerSelectorToName(allocator, selector) catch |err| switch (err) {
             error.DockerPsFailed => return 1,
@@ -525,18 +468,21 @@ pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
     else
         container_group.JsonGroupPaths{};
 
-    const src_abs = std.fs.cwd().realpathAlloc(allocator, src_raw_value) catch {
-        std.debug.print("Error: source directory does not exist: {s}\n", .{src_raw_value});
-        return 1;
+    const src_abs = resolveEffectiveSourcePath(allocator, cwd_abs, home_dir, parsed) catch |err| switch (err) {
+        error.TargetAlreadyExists,
+        error.GitCloneFailed,
+        error.SourceDirMissing,
+        => return 1,
+        else => return err,
     };
 
     var source_dir = std.fs.openDirAbsolute(src_abs, .{}) catch {
-        std.debug.print("Error: source path is not a directory: {s}\n", .{src_raw_value});
+        std.debug.print("Error: source path is not a directory: {s}\n", .{src_abs});
         return 1;
     };
     source_dir.close();
 
-    const dest_name: []const u8 = if (dest_name_arg) |dest_arg|
+    const dest_name: []const u8 = if (parsed.dest_name_arg) |dest_arg|
         dest_arg
     else
         std.fs.path.basename(src_abs);
@@ -552,22 +498,22 @@ pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
         else => return err,
     };
 
-    var parsed: ?std.json.Parsed(JsonValue) = null;
+    var parsed_json: ?std.json.Parsed(JsonValue) = null;
     defer {
-        if (parsed) |*p| p.deinit();
+        if (parsed_json) |*p| p.deinit();
     }
 
     var root: JsonValue = undefined;
     if (file_content) |content| {
         defer allocator.free(content);
 
-        parsed = std.json.parseFromSlice(JsonValue, allocator, content, .{
+        parsed_json = std.json.parseFromSlice(JsonValue, allocator, content, .{
             .allocate = .alloc_always,
         }) catch {
             std.debug.print("Error: repos.json is not valid JSON\n", .{});
             return 1;
         };
-        root = parsed.?.value;
+        root = parsed_json.?.value;
     } else {
         root = .{ .object = std.json.ObjectMap.init(allocator) };
     }
@@ -589,7 +535,6 @@ pub fn runWithArgs(allocator: Allocator, args: []const []const u8) !u8 {
         }
     }
 
-    const home_dir = try detectHomeDir(allocator);
     const new_src_norm = try normalizeSourcePath(allocator, src_abs, home_dir, cwd_abs);
 
     var status: Status = .append;
@@ -792,4 +737,129 @@ test "add_repo ensureRemoteSourceReady clones into missing target directory" {
     try testing.expectEqual(@as(usize, 1), test_clone_call_count);
     try testing.expectEqualStrings("https://example.com/repo.git", test_clone_remote.?);
     try testing.expectEqualStrings(target_abs, prepared);
+}
+
+test "add_repo remote mode writes repos using target basename by default" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const root_abs = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root_abs);
+
+    const target_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "abrowser" });
+    defer testing.allocator.free(target_abs);
+
+    const repos_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "repos.json" });
+    defer testing.allocator.free(repos_abs);
+
+    const original_runner = clone_runner;
+    clone_runner = fakeCloneCreatesDir;
+    defer clone_runner = original_runner;
+
+    const exit_code = try runWithArgs(arena.allocator(), &.{
+        "gitn add-repo",
+        target_abs,
+        "--from-source=https://github.com/xx/agent-browser",
+        "--repos",
+        repos_abs,
+    });
+
+    try testing.expectEqual(@as(u8, 0), exit_code);
+
+    const repos_content = try std.fs.cwd().readFileAlloc(testing.allocator, repos_abs, 4096);
+    defer testing.allocator.free(repos_content);
+
+    try testing.expect(std.mem.containsAtLeast(u8, repos_content, 1, target_abs));
+    try testing.expect(std.mem.containsAtLeast(u8, repos_content, 1, "\"abrowser\""));
+}
+
+test "add_repo remote clone failure does not write repos.json" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const root_abs = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root_abs);
+
+    const target_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "abrowser" });
+    defer testing.allocator.free(target_abs);
+
+    const repos_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "repos.json" });
+    defer testing.allocator.free(repos_abs);
+
+    const original_runner = clone_runner;
+    clone_runner = fakeCloneFails;
+    defer clone_runner = original_runner;
+
+    const exit_code = try runWithArgs(arena.allocator(), &.{
+        "gitn add-repo",
+        target_abs,
+        "--from-source=https://github.com/xx/agent-browser",
+        "--repos",
+        repos_abs,
+    });
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+    try testing.expectError(
+        error.FileNotFound,
+        std.fs.cwd().readFileAlloc(testing.allocator, repos_abs, 4096),
+    );
+}
+
+test "add_repo remote conflict preserves cloned target directory" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const root_abs = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root_abs);
+
+    const existing_source = try std.fs.path.join(testing.allocator, &.{ root_abs, "existing-src" });
+    defer testing.allocator.free(existing_source);
+    try std.fs.makeDirAbsolute(existing_source);
+
+    const target_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "abrowser" });
+    defer testing.allocator.free(target_abs);
+
+    const repos_abs = try std.fs.path.join(testing.allocator, &.{ root_abs, "repos.json" });
+    defer testing.allocator.free(repos_abs);
+    const seeded_repos = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\n  \"repos\": [[\"{s}\", \"abrowser\"]]\n}}\n",
+        .{existing_source},
+    );
+    defer testing.allocator.free(seeded_repos);
+
+    var repos_file = try std.fs.createFileAbsolute(repos_abs, .{ .truncate = true });
+    defer repos_file.close();
+    try repos_file.writeAll(seeded_repos);
+
+    const original_runner = clone_runner;
+    clone_runner = fakeCloneCreatesDir;
+    defer clone_runner = original_runner;
+
+    const exit_code = try runWithArgs(arena.allocator(), &.{
+        "gitn add-repo",
+        target_abs,
+        "--from-source=https://github.com/xx/agent-browser",
+        "--repos",
+        repos_abs,
+    });
+
+    try testing.expectEqual(@as(u8, 1), exit_code);
+
+    var cloned_dir = try std.fs.openDirAbsolute(target_abs, .{});
+    cloned_dir.close();
+
+    const repos_content = try std.fs.cwd().readFileAlloc(testing.allocator, repos_abs, 4096);
+    defer testing.allocator.free(repos_content);
+    try testing.expect(std.mem.containsAtLeast(u8, repos_content, 1, existing_source));
+    try testing.expect(!std.mem.containsAtLeast(u8, repos_content, 1, target_abs));
 }
