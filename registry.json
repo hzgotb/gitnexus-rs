@@ -1,0 +1,167 @@
+[
+  {
+    "name": "es-toolkit",
+    "path": "/repos/es-toolkit",
+    "storagePath": "/repos/es-toolkit/.gitnexus",
+    "indexedAt": "2026-03-26T03:30:20.069Z",
+    "lastCommit": "cd553eec56efbdc43cbd40a16c917cc5392e8a15",
+    "stats": {
+      "files": 3468,
+      "nodes": 15374,
+      "edges": 21075,
+      "communities": 256,
+      "processes": 170,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "GitNexus",
+    "path": "/repos/GitNexus",
+    "storagePath": "/repos/GitNexus/.gitnexus",
+    "indexedAt": "2026-03-26T03:29:05.044Z",
+    "lastCommit": "fec47cbc326a789e275197fc75fe8efe16a809e1",
+    "stats": {
+      "files": 396,
+      "nodes": 2795,
+      "edges": 6297,
+      "communities": 224,
+      "processes": 218,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "reka-ui",
+    "path": "/repos/reka-ui",
+    "storagePath": "/repos/reka-ui/.gitnexus",
+    "indexedAt": "2026-03-26T03:29:42.199Z",
+    "lastCommit": "49d1d32b0bfb82453632d0ca72f526a60efccaa9",
+    "stats": {
+      "files": 1793,
+      "nodes": 4444,
+      "edges": 6901,
+      "communities": 128,
+      "processes": 237,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "nuxt-ui",
+    "path": "/repos/nuxt-ui",
+    "storagePath": "/repos/nuxt-ui/.gitnexus",
+    "indexedAt": "2026-03-26T03:29:37.551Z",
+    "lastCommit": "0f1074fdaaaaffe821703363073758cda837837f",
+    "stats": {
+      "files": 1415,
+      "nodes": 4682,
+      "edges": 6682,
+      "communities": 73,
+      "processes": 49,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "nuxt",
+    "path": "/repos/nuxt",
+    "storagePath": "/repos/nuxt/.gitnexus",
+    "indexedAt": "2026-03-26T03:29:14.736Z",
+    "lastCommit": "579db312d568fe139daa5f64e3c2467d486ea7e2",
+    "stats": {
+      "files": 750,
+      "nodes": 4673,
+      "edges": 9278,
+      "communities": 251,
+      "processes": 290,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "shadcn-vue",
+    "path": "/repos/shadcn-vue",
+    "storagePath": "/repos/shadcn-vue/.gitnexus",
+    "indexedAt": "2026-03-26T03:30:30.014Z",
+    "lastCommit": "e005af9299be0b3668d9f4c9fdeb363e6b052a97",
+    "stats": {
+      "files": 5748,
+      "nodes": 8987,
+      "edges": 12932,
+      "communities": 97,
+      "processes": 278,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "vueuse",
+    "path": "/repos/vueuse",
+    "storagePath": "/repos/vueuse/.gitnexus",
+    "indexedAt": "2026-03-26T03:30:37.358Z",
+    "lastCommit": "b1d21c2f794717dc98846b9eb891e3ec367ead57",
+    "stats": {
+      "files": 1396,
+      "nodes": 6047,
+      "edges": 11137,
+      "communities": 253,
+      "processes": 300,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "fluentui",
+    "path": "/repos/fluentui",
+    "storagePath": "/repos/fluentui/.gitnexus",
+    "indexedAt": "2026-03-26T03:31:55.238Z",
+    "lastCommit": "d2c1f77fbc11c569f7d3f734b9575d944d1974c7",
+    "stats": {
+      "files": 15710,
+      "nodes": 48322,
+      "edges": 113170,
+      "communities": 1027,
+      "processes": 300,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "unplugin-macros",
+    "path": "/repos/unplugin-macros",
+    "storagePath": "/repos/unplugin-macros/.gitnexus",
+    "indexedAt": "2026-03-27T02:55:38.919Z",
+    "lastCommit": "e1b831524017bb5891ab4ea8afbdd68dee7535de",
+    "stats": {
+      "files": 33,
+      "nodes": 101,
+      "edges": 171,
+      "communities": 10,
+      "processes": 7,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "vue-macros",
+    "path": "/repos/vue-macros",
+    "storagePath": "/repos/vue-macros/.gitnexus",
+    "indexedAt": "2026-03-27T02:56:11.515Z",
+    "lastCommit": "1ed491a7e5642184465d46b1730439253a91d0c6",
+    "stats": {
+      "files": 752,
+      "nodes": 2037,
+      "edges": 3899,
+      "communities": 60,
+      "processes": 109,
+      "embeddings": 0
+    }
+  },
+  {
+    "name": "nitro",
+    "path": "/repos/nitro",
+    "storagePath": "/repos/nitro/.gitnexus",
+    "indexedAt": "2026-03-27T02:58:49.188Z",
+    "lastCommit": "2888e8f9cfa9335c0684c2de09e8ce790f89d179",
+    "stats": {
+      "files": 675,
+      "nodes": 2396,
+      "edges": 4342,
+      "communities": 95,
+      "processes": 142,
+      "embeddings": 0
+    }
+  }
+]
