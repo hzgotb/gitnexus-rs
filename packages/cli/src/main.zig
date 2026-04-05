@@ -140,26 +140,15 @@ pub fn main() void {
     std.process.exit(exit_code);
 }
 
-test {
-    _ = add_repo_cmd;
-    _ = completion_cmd;
-}
+pub const testing = struct {
+    pub const add_repo_module = add_repo_cmd;
+    pub const completion_module = completion_cmd;
 
-test "global language flags are not parsed as CLI-wide options" {
-    const testing = std.testing;
-    const parsed = try parseGlobalOptions(testing.allocator, &.{
-        "gitn",
-        "--lang",
-        "zh",
-        "analyze",
-    });
+    pub fn globalCommandIndex(allocator: Allocator, args: []const []const u8) !usize {
+        return (try parseGlobalOptions(allocator, args)).command_index;
+    }
 
-    try testing.expectEqual(@as(usize, 1), parsed.command_index);
-}
-
-test "Chinese command aliases are no longer built-in commands" {
-    const testing = std.testing;
-
-    try testing.expectEqual(BuiltinCommand.external, classifyCommand("帮助"));
-    try testing.expectEqual(BuiltinCommand.external, classifyCommand("诊断"));
-}
+    pub fn commandIsExternal(subcommand: []const u8) bool {
+        return classifyCommand(subcommand) == .external;
+    }
+};

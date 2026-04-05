@@ -50,12 +50,8 @@ pub fn main() void {
     std.process.exit(exit_code);
 }
 
-test "zsh completion does not advertise removed language features" {
-    const testing = std.testing;
-
-    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "--lang"));
-    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "--zh"));
-    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "--en"));
-    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "帮助"));
-    try testing.expect(!std.mem.containsAtLeast(u8, zsh_completion, 1, "诊断"));
-}
+pub const testing = struct {
+    pub fn zshCompletion() []const u8 {
+        return zsh_completion;
+    }
+};

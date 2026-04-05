@@ -14,7 +14,8 @@
 ## 2. 当前目录结构（核心部分）
 
 ```text
-.
+. 
+├── packages/cli/build.zig
 ├── packages/cli/src/
 │   ├── add_repo.zig
 │   ├── start.zig
@@ -22,8 +23,8 @@
 ├── Dockerfile
 ├── repos.json
 ├── registry.json
-├── build_release_all.sh
-├── build.zig
+├── scripts/build-zig.sh
+├── scripts/build_release_all.sh
 └── mise.toml
 ```
 
@@ -114,16 +115,23 @@
 
 ## 5. 构建与发布
 
-### `build_release_all.sh`
+### `scripts/build_release_all.sh`
 
 - 使用 `zig` 或 `mise x -- zig`
-- 直接编译 `packages/cli/src/*.zig`
+- 复用 `packages/cli/build.zig`
 - 交叉构建多个平台目标，产物输出到 `dist/`
 
 ### `mise.toml`
 
 - 配置 Zig 工具链
-- 将 `./zig-out/bin` 注入 PATH，便于在当前仓库终端直接调用 CLI
+- 将 `./packages/cli/zig-out/bin` 注入 PATH，便于在当前仓库终端直接调用 CLI
+
+### `scripts/build-zig.sh`
+
+- 仓库根目录的 Zig 构建入口
+- 固定使用 `packages/cli/build.zig`
+- 固定将缓存写到 `packages/cli/.zig-cache` 与 `packages/cli/.zig-global-cache`
+- 固定将产物输出到 `packages/cli/zig-out`
 
 ---
 
@@ -135,10 +143,9 @@
 
 ---
 
-## 7. 当前已知状态（2026-03-26）
+## 7. 当前已知状态（2026-04-02）
 
 - 当前源码目录已是 `packages/cli/src/*`
-- `build_release_all.sh` 已指向该目录，可用于发布构建
-- `build.zig` 仍引用 `apps/.../main.zig`，直接 `zig build` 会因路径不存在而失败
-
-如果要让 `zig build` 恢复可用，需要把 `build.zig` 的入口路径同步到 `packages/cli/src/*`。
+- 当前构建入口已切到 `packages/cli/build.zig`
+- 仓库根目录通过 `./scripts/build-zig.sh` 调用 Zig，避免在根目录生成 `.zig-cache` 与 `zig-out`
+- `./scripts/build_release_all.sh` 复用同一份 `packages/cli/build.zig` 做发布构建
